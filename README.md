@@ -184,6 +184,24 @@ Arduino selects precompiled archives by processor, not core version. Install the
 
 Each successful job uploads `SinricProWebRTC-arduino-<core>-<commit>`, containing an installable ZIP. Logs are uploaded separately. CI does not flash boards or publish releases; hardware validation is recorded separately.
 
+## Does it use a server?
+
+The current Doorbell example uses your ESP32 as the server. No external cloud server is configured.
+
+| Service | Location |
+|---|---|
+| Web server and browser viewer | On the ESP32, HTTP port 80 |
+| Signaling — exchanging connection details | On the same ESP32, through HTTP endpoints |
+| Camera/audio transport | Directly between the ESP32 and your browser over WebRTC |
+| STUN server | None configured |
+| TURN relay server | None configured |
+| SinricPro/Espressif cloud | Not used by this example |
+
+Your board's last observed address was `http://your-ip/`. That address comes from your local router and may change.
+
+The current setup is intended for devices on the same LAN. Internet access would require additional signaling and STUN/TURN configuration.
+
+
 ## License and credits
 
 Based on Espressif's esp-webrtc-solution doorbell demo and `esp_peer` engine. See [LICENSE](LICENSE) for this project's license and [THIRD_PARTY.md](THIRD_PARTY.md) for upstream sources, pinned revisions, and dependency licenses.
