@@ -13,8 +13,8 @@ The IDF dependencies are bundled as precompiled static libraries (`.a`). No ESP-
 
 ## Installation
 
-1. Generate the installable ZIP from this repository with `python tools/package.py`.
-2. In Arduino IDE, select **Sketch > Include Library > Add .ZIP Library** and choose `dist/SinricProWebRTC-0.1.0.zip`.
+1. Download the ZIP from this repository.
+2. In Arduino IDE, select **Sketch > Include Library > Add .ZIP Library** and choose zip file.
 3. Open **File > Examples > SinricPro WebRTC > Doorbell**.
 
 Alternatively, copy this repository into your sketchbook's `libraries/SinricProWebRTC` folder. Python is only needed to generate the ZIP, not to use the library.
