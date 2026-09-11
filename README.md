@@ -6,7 +6,7 @@ The IDF dependencies are bundled as precompiled static libraries (`.a`). No ESP-
 
 ## Requirements
 
-- **esp32 by Espressif Systems 3.3.11**, installed through Arduino Boards Manager. The bundled archives require this exact version.
+- **Arduino ESP32 3.3.11**, installed through Arduino Boards Manager. **The bundled archives require this exact version**. The exact version is required because we bundled precompiled ESP-IDF dependencies. If you would like to using another version take a look at [BUILDING.md](BUILDING.md)
 - An ESP32 or ESP32-S3 camera board with **PSRAM enabled**.
 - An application partition of at least **3 MB**.
 - Chrome or Edge on the same local network as the board.
