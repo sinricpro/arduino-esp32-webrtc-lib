@@ -1,5 +1,7 @@
 # WebRTC Doorbell
 
+<img width="572" height="819" alt="image" src="https://github.com/user-attachments/assets/2b212348-a2d9-4860-a053-21c6167e8d98" />
+
 Stream camera images from an ESP32 or ESP32-S3 to a browser on your local network. The board serves the viewer and supports ring, accept, and end-call controls. XIAO ESP32S3 Sense can also send its onboard microphone audio.
 
 ## Requirements
