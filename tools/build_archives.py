@@ -10,6 +10,7 @@ import subprocess
 import argparse
 import hashlib
 import json
+from build_config import add_core_argument, profile, data_dir, workspace, library_dir, sources_dir, verify_sources
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,20 +20,23 @@ def run(args, **kwargs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--target', default='esp32s3', choices=['esp32s3', 'esp32'])
+    add_core_argument(parser)
     args = parser.parse_args()
-    packages = Path(os.environ['LOCALAPPDATA']) / 'Arduino15/packages/esp32'
-    sdk = packages / f'tools/{args.target}-libs/3.3.11'
-    tool = packages / 'tools/esp-x32/2601/bin'
+    selected = profile(args.core_version)
+    verify_sources(args.core_version)
+    packages = data_dir() / 'packages/esp32'
+    sdk = packages / f"tools/{args.target}-libs/{selected['sdk_version']}"
+    tool = packages / f"tools/esp-x32/{selected['toolchain']}/bin"
     gcc = tool / f'xtensa-{args.target}-elf-gcc.exe'
     ar = tool / 'xtensa-esp-elf-ar.exe'
     nm = tool / 'xtensa-esp-elf-nm.exe'
     objcopy = tool / 'xtensa-esp-elf-objcopy.exe'
-    out = ROOT / f'build/{args.target}'
+    out = workspace(args.core_version) / 'objects' / args.target
     out.mkdir(parents=True, exist_ok=True)
-    mbed = ROOT / 'build-support/esp-idf/components/mbedtls/mbedtls'
-    srtp = ROOT / 'build-support/esp-adf-libs/esp_libsrtp/libsrtp'
-    peer = ROOT / 'upstream/components/esp_peer'
-    if 'esp-idf: v5.5.5 b774170ff46' not in (sdk / 'versions.txt').read_text():
+    mbed = sources_dir(args.core_version) / 'esp-idf/components/mbedtls/mbedtls'
+    srtp = sources_dir(args.core_version) / 'esp-adf-libs/esp_libsrtp/libsrtp'
+    peer = sources_dir(args.core_version) / 'esp-webrtc-solution/components/esp_peer'
+    if f"esp-idf: v{selected['idf_version']} {selected['idf_commit'][:10]}" not in (sdk / 'versions.txt').read_text():
         raise SystemExit('Unexpected Arduino IDF SDK revision; refusing an ABI-mismatched build.')
     config = (mbed / 'include/mbedtls/mbedtls_config.h').read_text()
     disabled = ['MBEDTLS_NET_C', 'MBEDTLS_FS_IO', 'MBEDTLS_ENTROPY_NV_SEED',
@@ -138,7 +142,7 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
     run([objcopy, '--redefine-syms=' + str(mapping), peer / f'libs/{args.target}/libpeer_default.a', prebuilt])
     for obj in objects:
         run([objcopy, '--redefine-syms=' + str(mapping), obj])
-    dest = ROOT / f'src/{args.target}'
+    dest = library_dir(args.core_version) / 'src' / args.target
     dest.mkdir(parents=True, exist_ok=True)
     archive = dest / 'libsinric_webrtc.a'
     # MRI ADDLIB preserves all upstream archive members.
@@ -151,7 +155,8 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
     if leaked:
         raise RuntimeError('Unnamespaced private crypto references: ' + '\n'.join(leaked))
     manifest = {
-        'target': args.target, 'arduino_core': '3.3.11', 'idf': '5.5.5',
+        'target': args.target, 'arduino_core': args.core_version, 'idf': selected['idf_version'],
+        'profile': selected,
         'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
         'private_symbols': len(symbols),
         'sources': {str(p.relative_to(ROOT)): run(['git', '-C', p, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()

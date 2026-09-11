@@ -3,11 +3,19 @@ from pathlib import Path
 import hashlib
 import os
 import subprocess
+import argparse
+import sys
 
 root = Path(__file__).resolve().parents[1]
-nm = Path(os.environ['LOCALAPPDATA']) / 'Arduino15/packages/esp32/tools/esp-x32/2601/bin/xtensa-esp-elf-nm.exe'
+sys.path.insert(0, str(root / 'tools'))
+from build_config import PROFILES, profile, data_dir, library_dir, verify_archive
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--core-version', choices=PROFILES)
+args = parser.parse_args()
+selected = profile(args.core_version or '3.3.11')
+nm = data_dir() / f"packages/esp32/tools/esp-x32/{selected['toolchain']}/bin/xtensa-esp-elf-nm.exe"
 for target in ['esp32', 'esp32s3']:
-    archive = root / f'src/{target}/libsinric_webrtc.a'
+    archive = verify_archive(args.core_version, target) if args.core_version else root / f'src/{target}/libsinric_webrtc.a'
     data = archive.read_bytes()
     assert data[:8] == b'!<arch>\n'
     pos = 8

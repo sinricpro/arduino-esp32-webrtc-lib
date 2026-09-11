@@ -1,3 +1,40 @@
+# Current build and camera validation
+
+The versioned build scripts rebuilt both processor archives from each selected dependency profile. Archive byte-order and private crypto isolation checks passed for all four archives.
+
+| Arduino core | ESP-IDF | Doorbell profiles | HardwareCheck |
+| --- | --- | --- | --- |
+| 3.3.11 | 5.5.5 | All 10 compile | Compiles |
+| 3.3.10 | 5.5.4 | All 10 compile | Compiles |
+
+The profiles are ESP-EYE, XIAO Sense, Freenove S3, M5Camera A/B, AI-Thinker, WROVER-KIT, ESP32-S3 WROOM with PWDN 38, GOOUUU S3, and LILYGO T-Camera. Per-profile logs are in `build/arduino-<core>/compile/`; local compiled-size results are in `build/versioned-compile-results.json`.
+
+PlatformIO Core 6.2.0 builds passed for ESP32-CAM and XIAO ESP32S3 Sense using pioarduino 55.03.311 / Arduino 3.3.11. These builds linked the freshly rebuilt 3.3.11 archives from the staged library, with the camera configuration owned by the sketch. The workflow passed Actionlint locally. A GitHub-hosted workflow run has not been triggered from this workspace.
+
+Six build-configuration tests passed, covering wrong core/processor/profile, altered archive bytes, and exclusion of PlatformIO build outputs from distribution. The embedded viewer's existing protocol tests passed after formatting.
+
+## LILYGO T-Camera camera fix
+
+The user identified the connected board as LILYGO TTGO T-Camera, ESP32-WROVER-B with OV2640 and OLED. It reports 4 MB flash and 4 MB PSRAM. ESP-EYE and AI-Thinker camera profiles do not match this board. `BOARD_LILYGO_CAMERA` uses the camera pins from LilyGO's camera-bme280 example: XCLK 32, SCCB SDA 13 / SCL 12, PWDN 26.
+
+With Arduino 3.3.11, the installed example initialized the camera and passed the browser test at VGA (640 x 480): 97 rendered JPEG frames in 20 seconds, ring notification, end-call, and reconnect (14 frames). No browser errors were reported. This first camera-fix test used the previously shipped 3.3.11 archive; tests of rebuilt variants are recorded below when completed. No OLED, BME280, PIR, speaker, or actuator functions were enabled.
+
+User settings were preserved, and the selected installed profile was corrected to LILYGO. Pre-change installed files and the board's flash are backed up locally in `build-support/installed-user-edits.zip` and `build/device-backup/com14-before-camera-fix.bin`; they are excluded from library packages.
+
+## Rebuilt 3.3.10 hardware result
+
+The 3.3.10 / IDF 5.5.4 firmware linked the new ESP32 archive and passed the same LILYGO VGA browser test: 97 frames in 20 seconds, ring, end-call, and reconnect with 14 frames, with no browser errors. An initial upload failed with an esptool serial error; retrying at 115200 baud succeeded and the flash hash was verified. Local results are in `build/lilygo-browser-3.3.10.json`.
+
+## Rebuilt 3.3.11 hardware result
+
+After testing 3.3.10, the board and installed Arduino library were returned to the newly rebuilt 3.3.11 variant. The final LILYGO VGA browser test passed with 97 frames in 20 seconds, ring, end-call, and reconnect with 14 frames; no browser errors occurred. Flash hashes were verified after upload. Local results are in `build/lilygo-browser-3.3.11-rebuilt.json`.
+
+These checks establish short live-streaming operation on this LILYGO board for both variants. Microphone quality, long-duration stability, remote ICE/NAT traversal, and the other untested physical board variants remain outside these hardware results.
+
+## Earlier baseline results
+
+The following records describe the earlier six-profile release and its original archive checksums; newly rebuilt variants carry their own `build-info.json` files.
+
 # Validation — 2026-09-11
 
 ## Arduino compilation

@@ -1,90 +1,98 @@
-# Building from source
+# Building versioned archives
 
-This guide covers rebuilding the archives on Windows and adapting the build to another Arduino ESP32 core version.
+The build profiles in [tools/core_profiles.json](tools/core_profiles.json) select exact dependencies for each Arduino ESP32 core:
 
-**Currently supported: Arduino ESP32 3.3.11 only.** The scripts and CI are pinned to that version. Additional versions require porting and validation; there is currently no `--core-version` option.
+| Arduino core | ESP-IDF | SDK package version | Xtensa toolchain |
+| --- | --- | --- | --- |
+| 3.3.11 | 5.5.5 | 3.3.11 | 2601 |
+| 3.3.10 | 5.5.4 | 3.3.10 | 2601 |
 
-## What gets compiled
+These are build configurations, not a claim that every board has been tested physically. See [VALIDATION.md](VALIDATION.md) for hardware results.
 
-The builder compiles the available peer adapter and transport sources, libSRTP, and private Mbed TLS against Arduino's installed ESP-IDF SDK. It supplies hardware randomness and a monotonic clock, then renames private crypto symbols to avoid collisions with Arduino's TLS libraries.
+## What is rebuilt
 
-The resulting archive also includes Espressif's supplied `libpeer_default.a`. That peer engine is consumed as a binary, so this is not a complete source rebuild of every dependency. Compatibility with another SDK also depends on that upstream binary. See [THIRD_PARTY.md](THIRD_PARTY.md) for revisions and licenses.
+The scripts compile available peer adapter and transport sources, libSRTP, and a private Mbed TLS configuration against the selected Arduino SDK. Private crypto symbols are renamed to avoid conflicts with Arduino's TLS libraries. Espressif's supplied `libpeer_default.a` is included as a binary, so this is not a complete source rebuild of every dependency. See [THIRD_PARTY.md](THIRD_PARTY.md) for sources and licenses.
 
-Arduino compiles the wrapper and your sketch normally. Camera configuration changes do not require rebuilding the archives.
+Your sketch, camera configuration, and the Arduino wrapper compile normally. Changes to those files do not require rebuilding the archives.
 
 ## Prepare Windows
 
-Install Python **3.12 or newer**, Git, and **esp32 by Espressif Systems 3.3.11** through Arduino Boards Manager. Install Node.js for the viewer tests. Use a short project path without spaces, such as `C:\dev\sinricpro-webrtc-lib`, because the archive builder uses GNU ar MRI scripts.
+Install Python **3.12 or newer**, Git, Node.js for viewer tests, and Arduino CLI (standalone or bundled with Arduino IDE). Use a short project path without spaces, because GNU ar MRI scripts are used during archive creation. The scripts use Windows tool executables and do not require a separate ESP-IDF or WSL installation.
 
-Open PowerShell in the project root. Packages must be installed under `%LOCALAPPDATA%\Arduino15`. No separate ESP-IDF installation, WSL, or `IDF_PATH` is needed. The scripts use Windows executables; these instructions do not apply to Linux/WSL.
-
-For the commands below, select your Arduino CLI executable. The normal Arduino IDE installation provides one here:
+Open PowerShell in the project root. Set the CLI path if it is not on PATH:
 
 ```powershell
 $env:ARDUINO_CLI = "$env:LOCALAPPDATA\Programs\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe"
+```
+
+Choose the target core. For local multi-version builds, isolate Arduino packages to avoid replacing your IDE's installed core:
+
+```powershell
+$coreVersion = '3.3.10' # Or '3.3.11'.
+$env:ARDUINO_DIRECTORIES_DATA = Join-Path (Get-Location) "build-support/arduino-$coreVersion"
+$env:ARDUINO_DIRECTORIES_DOWNLOADS = Join-Path (Get-Location) 'build-support/arduino-downloads'
+& $env:ARDUINO_CLI core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+& $env:ARDUINO_CLI core install "esp32:esp32@$coreVersion" --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
 & $env:ARDUINO_CLI core list
 ```
 
-Change the path if you installed the IDE elsewhere or use standalone Arduino CLI. Confirm that `core list` shows `esp32:esp32` version `3.3.11`.
+Run commands individually and stop on errors. Confirm the selected core is installed. Both the CLI and Python scripts use `ARDUINO_DIRECTORIES_DATA`. Without that variable, the builder uses `%LOCALAPPDATA%/Arduino15`; use the matching core installed there.
 
-## Fetch and build
-
-Run each command from the project root and stop if it reports an error:
+## Fetch, build, validate, and package
 
 ```powershell
-python tools/fetch_sources.py
-python tools/build_archives.py --target esp32
-python tools/build_archives.py --target esp32s3
-```
-
-The fetch script downloads pinned upstream commits and the matching IDF Mbed TLS submodule. It refuses to reuse checkouts at different commits; use a fresh project copy when experimenting with other revisions.
-
-| Component | Current selection |
-| --- | --- |
-| Arduino ESP32 core | 3.3.11 |
-| SDK packages | `tools/esp32-libs/3.3.11` and `tools/esp32s3-libs/3.3.11` |
-| ESP-IDF | 5.5.5, commit `b774170ff46c393eeb5e495ea37936038d3f4f4f` |
-| Xtensa toolchain | `tools/esp-x32/2601/bin` |
-
-Successful builds replace `src/esp32/libsinric_webrtc.a` and `src/esp32s3/libsinric_webrtc.a`. Each target also receives a `build-info.json` recording versions, source commits, symbol count, and SHA-256. Intermediate files go under `build/`.
-
-## Validate and package
-
-```powershell
-python tests/archives.py
+python tools/fetch_sources.py --core-version $coreVersion
+python tools/build_archives.py --core-version $coreVersion --target esp32
+python tools/build_archives.py --core-version $coreVersion --target esp32s3
+python tests/archives.py --core-version $coreVersion
+python tools/prepare_library.py --core-version $coreVersion
+python -m unittest discover -s tests -p test_build_config.py
 node tests/viewer.test.cjs
-python tools/compile_matrix.py
-& $env:ARDUINO_CLI compile --fqbn 'esp32:esp32:esp32:PSRAM=enabled,PartitionScheme=huge_app' --library . --build-path build/hardwarecheck examples/HardwareCheck
-python tools/package.py
+python tools/compile_matrix.py --core-version $coreVersion
+python tools/package.py --core-version $coreVersion
 ```
 
-The matrix compiles all six Doorbell profiles and saves logs as `build/matrix-*.log`. Archive checks verify byte order, required symbols, and private crypto isolation. Compilation does not establish runtime compatibility: also run HardwareCheck and Doorbell on hardware, checking camera, audio where available, connection, disconnect, and reconnect. See [VALIDATION.md](VALIDATION.md) for the existing results and test procedure.
+The source fetch verifies the pinned commits, including Mbed TLS. Each archive builder verifies the SDK IDF revision and source checkouts, and records its core, processor, dependency profile, source commits, and checksum in `build-info.json`. Staging and packaging reject mismatched profiles or modified archive bytes.
 
-Install `dist/SinricProWebRTC-0.1.0.zip` through **Sketch > Include Library > Add .ZIP Library**, replacing the previous library copy. Keep Wi-Fi placeholders in the distributed example; packaging rejects substituted credentials.
+The compile matrix builds all ten Doorbell profiles plus HardwareCheck. Board selection is written into isolated sketch copies so profiles sharing a core configuration can reuse Arduino's compilation cache. These builds never upload firmware.
 
-## Port to another core version
+| Output | Location |
+| --- | --- |
+| Pinned sources | `build-support/sources-<core>/` |
+| Intermediate objects | `build/arduino-<core>/objects/<target>/` |
+| Staged library | `build/arduino-<core>/SinricProWebRTC/` |
+| Compiler logs | `build/arduino-<core>/compile/*.log` |
+| Installable ZIP | `dist/SinricProWebRTC-0.1.0-arduino-<core>.zip` |
 
-Treat each core version as a separate build configuration. Changing the version guard alone does not make existing binaries compatible.
+The staged library contains both processor archives, an exact core guard in `SinricProWebRTCVersion.h`, matching Arduino metadata, and a README identifying the variant. The checkout's baseline archives and installed library are not replaced by this process.
 
-1. Start in a separate project copy and install the target core in an isolated build environment. Record its actual SDK packages, compiler, and ESP-IDF revision from package metadata and SDK `versions.txt`. SDK package versions do not necessarily equal the core version.
-2. Update the IDF commit in `tools/fetch_sources.py` to match the SDK, including its Mbed TLS submodule. Check whether the pinned peer and libSRTP revisions support it. If those dependencies change, update their pins, public headers, and license records together.
-3. Adapt `tools/build_archives.py`: SDK and toolchain paths, executable names, expected IDF revision, include paths, compiler flags, and build metadata. Review private Mbed TLS configuration, port functions, and symbol renaming for API changes. Retain the byte-order and crypto-isolation checks.
-4. Set the exact target core in `src/SinricProWebRTC.h` and update its diagnostic. Update the toolchain path in `tests/archives.py`, any changed board options in `tools/compile_matrix.py`, and the required version in `library.properties` and documentation.
-5. Rebuild both archives and run all compilation and hardware checks with that core. If the supplied peer binary is incompatible, an appropriate upstream binary or upstream changes are required.
-6. Package the validated result separately, label it with its core version, and record the tested SDK, compiler, commits, and hardware results.
+Keep Wi-Fi placeholders in the distributed example. Configure credentials only in your local sketch copy. For hardware validation, install the generated variant, upload HardwareCheck and Doorbell on the intended board, then test camera, audio where available, connection, disconnect/reconnect, and sustained streaming.
 
-After the scripts have explicit configurations for each validated version, CI can run them as a version matrix. The current workflow still builds only 3.3.11; adding matrix values alone would continue selecting the hard-coded SDK.
+To package the existing checkout's baseline 3.3.11 binaries without rebuilding, use `python tools/package.py` without `--core-version`. That creates the original unqualified ZIP. To package new builds, always pass the core version.
 
-## Distribute multiple versions
+## PlatformIO
 
-Arduino selects precompiled archives by MCU and, where applicable, floating-point ABI. There is no standard core-version directory selector: adding a directory such as `src/esp32/3.3.11/` does not enable automatic selection. See the [Arduino library specification](https://docs.arduino.cc/arduino-cli/library-specification/#precompiled-binaries).
-
-Provide a separate installable ZIP for each validated core. Keep the normal `SinricProWebRTC/src/esp32/` and `src/esp32s3/` layout inside each ZIP, with a matching exact version guard. Install one variant at a time to avoid duplicate-library selection.
-
-After packaging the existing 3.3.11 build, label it explicitly:
+`library.json` and `tools/platformio_build.py` link the processor-specific archive. The supplied project in `examples/PlatformIO` pins pioarduino **55.03.311**, supplying Arduino ESP32 **3.3.11**. Use it with the 3.3.11 variant:
 
 ```powershell
-Copy-Item dist/SinricProWebRTC-0.1.0.zip dist/SinricProWebRTC-0.1.0-arduino-3.3.11.zip
+python -m pip install platformio==6.2.0
+python -m platformio run --project-dir build/arduino-3.3.11/SinricProWebRTC/examples/PlatformIO -e esp32cam -e xiao_s3_sense
 ```
 
-A single archive set may eventually support several core versions if compatibility is established for each version before widening the guard.
+The project reuses the Doorbell sketch rather than maintaining a second implementation. A `lilygo_camera` environment is also provided. The 3.3.10 Arduino ZIP is built separately; the provided PlatformIO project is pinned to 3.3.11 and its version guard intentionally rejects a different variant.
+
+## GitHub Actions
+
+The workflow runs an independent Windows job for each core version on pull requests, default-branch pushes, and manual dispatch. Each job installs its core, builds both archives, stages the library, runs the checks, and publishes a core-labeled ZIP artifact. A failed matrix job does not cancel the other version. The 3.3.11 job also compiles the PlatformIO ESP32 and ESP32-S3 environments.
+
+Download the artifact for your core, extract the installable ZIP from it, and install that ZIP through Arduino IDE. CI does not publish a release or test physical hardware.
+
+## Add another core version
+
+1. Identify the target core's SDK packages, toolchain, and ESP-IDF commit from Espressif's package index and SDK `versions.txt`. SDK package version numbers need not match core version numbers.
+2. Add a profile to `tools/core_profiles.json`, including the exact IDF, Mbed TLS, peer, and ADF commits. Check compatibility of the supplied peer binary. If upstream dependencies change, review copied public headers and redistribution licenses too.
+3. If SDK layout, compiler flags, crypto APIs, or configuration changed, adapt the builder. Retain the IDF revision, byte-order, symbol-isolation, and checksum checks.
+4. Run the full source-build procedure in an isolated Arduino data directory and resolve compilation and hardware failures. A profile entry alone does not establish compatibility.
+5. Add the validated version to the workflow matrix. PlatformIO requires a separately pinned matching platform; do not assume its default framework matches the Arduino IDE core.
+
+Arduino's standard precompiled layout selects by MCU and floating-point ABI, not Arduino core version. Keep one matching library variant installed at a time. See the [Arduino library specification](https://docs.arduino.cc/arduino-cli/library-specification/#precompiled-binaries). Never widen the generated version guard without evidence that the same archives work across those versions.

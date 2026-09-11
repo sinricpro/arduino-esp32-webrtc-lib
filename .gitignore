@@ -1,0 +1,6 @@
+/build/
+/build-support/
+/upstream/
+/dist/
+__pycache__/
+.pio/

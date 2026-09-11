@@ -1,12 +1,18 @@
 """Fetch exact sources used by build_archives.py. Requires Git and Python."""
 from pathlib import Path
 import subprocess
+import argparse
+from build_config import add_core_argument, profile, sources_dir, verify_sources
 
-ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+add_core_argument(parser)
+args = parser.parse_args()
+selected = profile(args.core_version)
+ROOT = sources_dir(args.core_version)
 SOURCES = [
-    ('upstream', 'https://github.com/espressif/esp-webrtc-solution.git', 'c8650846b512e6e1375e5f78c1c41619b8d645eb'),
-    ('build-support/esp-idf', 'https://github.com/espressif/esp-idf.git', 'b774170ff46c393eeb5e495ea37936038d3f4f4f'),
-    ('build-support/esp-adf-libs', 'https://github.com/espressif/esp-adf-libs.git', 'da256e5f462a8e010667d35314a5ba5cdc4a8d9a'),
+    ('esp-webrtc-solution', 'https://github.com/espressif/esp-webrtc-solution.git', selected['peer_commit']),
+    ('esp-idf', 'https://github.com/espressif/esp-idf.git', selected['idf_commit']),
+    ('esp-adf-libs', 'https://github.com/espressif/esp-adf-libs.git', selected['adf_commit']),
 ]
 
 def git(path, *args):
@@ -23,4 +29,5 @@ for relative, url, commit in SOURCES:
     if git(path, 'rev-parse', 'HEAD') != commit:
         raise SystemExit(f'{path}: different checkout; preserve it and choose a clean workspace.')
     print(relative, commit)
-git(ROOT / 'build-support/esp-idf', 'submodule', 'update', '--init', '--depth', '1', 'components/mbedtls/mbedtls')
+git(ROOT / 'esp-idf', 'submodule', 'update', '--init', '--depth', '1', 'components/mbedtls/mbedtls')
+verify_sources(args.core_version)

@@ -1,19 +1,15 @@
 #pragma once
-// Select one profile; these numbers are also used by the compile-matrix script.
-#define BOARD_ESP_EYE 1
-#define BOARD_XIAO_S3_SENSE 2
-#define BOARD_FREENOVE_S3 3
-#define BOARD_M5CAMERA 4
-#define BOARD_M5CAMERA_B 5
-#define BOARD_AI_THINKER 6
+#include "BoardProfiles.h"
+
+// LILYGO T-Camera ESP32-WROVER-B / OV2640 on COM14 (camera only).
 #ifndef DOORBELL_BOARD
-#define DOORBELL_BOARD BOARD_XIAO_S3_SENSE
+#define DOORBELL_BOARD BOARD_LILYGO_CAMERA
 #endif
 
-static const char WIFI_SSID[] = "YOUR_WIFI_SSID";
-static const char WIFI_PASSWORD[] = "YOUR_WIFI_PASSWORD";
+static const char WIFI_SSID[] = "June";
+static const char WIFI_PASSWORD[] = "wifipassword";
 // Enter this token in the browser viewer. Change before using on your LAN.
-static const char VIEWER_TOKEN[] = "change-this-token";
+static const char VIEWER_TOKEN[] = "1234";
 static constexpr bool WEBRTC_DEBUG = false; // Includes ephemeral SDP/ICE details in Serial output.
 // Optional external ring button to GND. -1 uses Serial Monitor 'r' instead.
 // Select an unused GPIO; do not reuse a camera, microphone or flash/PSRAM pin.

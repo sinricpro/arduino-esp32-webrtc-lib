@@ -1,0 +1,20 @@
+{
+  "3.3.11": {
+    "sdk_version": "3.3.11",
+    "toolchain": "2601",
+    "idf_version": "5.5.5",
+    "idf_commit": "b774170ff46c393eeb5e495ea37936038d3f4f4f",
+    "mbedtls_commit": "9d669eadb1955d348986b9280156710aaaadf79f",
+    "peer_commit": "c8650846b512e6e1375e5f78c1c41619b8d645eb",
+    "adf_commit": "da256e5f462a8e010667d35314a5ba5cdc4a8d9a"
+  },
+  "3.3.10": {
+    "sdk_version": "3.3.10",
+    "toolchain": "2601",
+    "idf_version": "5.5.4",
+    "idf_commit": "735507283d5b2f9fb363a1901172dbd9e847945d",
+    "mbedtls_commit": "ffb280bb63c78bfec1e1ab55040671768c85c923",
+    "peer_commit": "c8650846b512e6e1375e5f78c1c41619b8d645eb",
+    "adf_commit": "da256e5f462a8e010667d35314a5ba5cdc4a8d9a"
+  }
+}

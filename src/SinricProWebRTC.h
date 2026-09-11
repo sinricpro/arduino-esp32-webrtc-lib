@@ -4,9 +4,7 @@
 #include "esp_peer.h"
 #include "esp_peer_default.h"
 
-#if ESP_ARDUINO_VERSION != ESP_ARDUINO_VERSION_VAL(3, 3, 11)
-#error "SinricPro WebRTC 0.1.0 requires Arduino ESP32 core 3.3.11 (archive ABI)."
-#endif
+#include "SinricProWebRTCVersion.h"
 #if !CONFIG_IDF_TARGET_ESP32 && !CONFIG_IDF_TARGET_ESP32S3
 #error "Precompiled WebRTC archives are available for ESP32 and ESP32-S3 only."
 #endif
