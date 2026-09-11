@@ -6,8 +6,8 @@
 #define DOORBELL_BOARD BOARD_LILYGO_CAMERA
 #endif
 
-static const char WIFI_SSID[] = "WIFI_SSID";
-static const char WIFI_PASSWORD[] = "WIFI_PASSWORD";
+static const char WIFI_SSID[] = "YOUR_WIFI_SSID";
+static const char WIFI_PASSWORD[] = "YOUR_WIFI_PASSWORD";
 // Enter this token in the browser viewer. Change before using on your LAN.
 static const char VIEWER_TOKEN[] = "1234";
 static constexpr bool WEBRTC_DEBUG = false; // Includes ephemeral SDP/ICE details in Serial output.
