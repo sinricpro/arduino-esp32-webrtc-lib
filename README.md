@@ -132,18 +132,35 @@ Use one peer instance at a time. Serialize peer operations and keep configuratio
 
 The [HardwareCheck example](examples/HardwareCheck/HardwareCheck.ino) provides camera, crypto, and peer initialization diagnostics. Select its camera profile before uploading.
 
-## Rebuild the precompiled libraries
+## Build from source
 
-On Windows, install Python 3, Git, and Arduino ESP32 core 3.3.11, then run:
+On Windows, install Python **3.12 or newer**, Git, Arduino ESP32 core **3.3.11**, and Node.js for the viewer tests. Use a project path without spaces and run these commands from the project root, stopping if a command fails:
 
 ```powershell
 python tools/fetch_sources.py
 python tools/build_archives.py --target esp32
 python tools/build_archives.py --target esp32s3
+python tests/archives.py
+node tests/viewer.test.cjs
+python tools/compile_matrix.py
 python tools/package.py
 ```
 
-The scripts use the matching Arduino SDK and toolchain under `%LOCALAPPDATA%/Arduino15`. Archives are placed in `src/esp32/` and `src/esp32s3/`. A private crypto build supplies DTLS-SRTP support with renamed symbols to keep it separate from Arduino's TLS libraries.
+The scripts use the SDK and toolchain under `%LOCALAPPDATA%/Arduino15`; no separate ESP-IDF or WSL installation is required. The compile script finds Arduino CLI on PATH or in the standard Arduino IDE installation. Set `ARDUINO_CLI` to its executable path if installed elsewhere.
+
+The build replaces the archives in `src/esp32/` and `src/esp32s3/` and generates `dist/SinricProWebRTC-0.1.0.zip`. It compiles the available adapter, transport, libSRTP, and private Mbed TLS sources, and includes Espressif's supplied peer-engine binary. It is not a complete source rebuild of that engine.
+
+See [BUILDING.md](BUILDING.md) for the full setup, HardwareCheck compilation, hardware validation, and installation procedure.
+
+## Supporting multiple Arduino core versions
+
+The bundled archives require **3.3.11** because they were compiled against its ESP-IDF SDK and toolchain. Another core can change internal APIs or data layouts; removing the version guard does not establish compatibility.
+
+Archives can be built for additional versions after adapting the SDK paths, dependency revisions, compiler settings, and version checks, then validating compilation and hardware behavior for each version. **The current scripts and CI support 3.3.11 only; there is no automatic core-version selection or `--core-version` option yet.**
+
+Distribute a separate library ZIP for each validated core, such as `SinricProWebRTC-0.1.0-arduino-3.3.11.zip`, and install one variant at a time. Arduino selects precompiled archives by processor, not Arduino core version, so version-named subdirectories alone cannot select the correct archive.
+
+Follow the [porting and distribution steps](BUILDING.md#port-to-another-core-version) before adding a version to the CI build matrix.
 
 ## Automated builds
 
