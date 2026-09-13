@@ -5,7 +5,7 @@
   "keywords": ["webrtc", "camera", "doorbell", "esp32"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/sinricpro/sinricpro-webrtc-lib.git"
+    "url": "https://github.com/sinricpro/arduino-esp32-webrtc-lib.git"
   },
   "authors": [{"name": "SinricPro", "maintainer": true}],
   "license": "MIT",
