@@ -1,4 +1,4 @@
-# SinricPro WebRTC for Arduino ESP32
+# WebRTC for Arduino ESP32
 
 WebRTC for Arduino ESP32 and ESP32-S3, powered by Espressif's `esp_peer` engine. Includes a camera doorbell example with a browser viewer, microphone streaming on XIAO ESP32S3 Sense, and ring/call controls.
 
