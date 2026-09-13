@@ -85,6 +85,37 @@ The Doorbell viewer expects JPEG frames and limits each frame to 128 KiB. Keep `
 
 For migration, replace `WebRTCCamera::begin(board)` with `WebRTCCamera::begin(config)`. The former library board enum and presets now live under `CameraSetup` in each example.
 
+
+## Use with SinricPro (remote live view)
+
+The **SinricProCamera** example streams to the SinricPro portal and app from anywhere. Signaling runs over the device's SinricPro connection: the viewer's offer arrives as a `getWebRTCAnswer` request together with STUN/TURN servers, and `SinricProWebRTCSession` answers it.
+
+1. Install the SinricPro library version that provides `CameraController::onWebRTCOffer`.
+2. In the portal, create a **Camera** device and set Camera Stream Configuration to Board **ESP32**, Streaming Protocol **WebRTC**.
+3. Open **File > Examples > SinricProWebRTC > SinricProCamera**, fill in `Settings.h`, and upload.
+4. Tap the camera in the app, or **Preview** in the portal.
+
+```cpp
+SinricProWebRTCSession session;   // owns the peer on its own FreeRTOS task
+
+bool onWebRTCOffer(const String &deviceId, const String &offerSdp,
+                   const std::vector<SinricProIceServer> &iceServers, String &answerSdp) {
+    std::vector<WebRTCIceServer> servers;
+    for (const auto &s : iceServers) servers.push_back({s.url, s.username, s.credential});
+    return session.handleOffer(offerSdp, servers, answerSdp);  // blocks until ICE gathering is done
+}
+```
+
+`handleOffer()` returns an answer that already contains every local candidate, because SinricPro signaling is a single offer/answer exchange without trickle ICE. One viewer is served at a time; a new offer replaces the current viewer. Amazon Alexa and Google Home streaming need a native H.264 track and are not supported yet.
+
+Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.0+) answers `{webrtc, webrtcAudio}` on its own, and older firmware is asked to update.
+
+**Viewer controls.** Text messages on the same DataChannel carry JSON controls (binary messages stay JPEG fragments). When the channel opens the camera sends `{"type":"capabilities",...}` and `{"type":"state",...}`; viewers send `{"type":"set","resolution":"SVGA"}`, `fps`, `flash`, `flip`, `mirror` or `autoQuality`. Resolutions are offered up to `Config::maxFrameSize`, which must not exceed the size the camera was initialized with. Set `Config::flashPin` to expose a flash LED (AI-Thinker: GPIO 4).
+
+**Automatic quality.** When frames take longer to send than the frame interval, or stall, the session first lowers the frame rate and then raises JPEG compression, recovering after a run of fast frames. The viewer sees the level in `state.qualityLevel` and `state.effectiveFps`.
+
+**Microphone.** Set `Config::audio = true`, provide `setAudioSource()` (20 ms of 8 kHz PCMU per call) and call `camera.enableWebRTCAudio()` so viewers request an audio track. The examples enable the XIAO ESP32S3 Sense PDM microphone.
+
 ## Capabilities and limits
 
 | Feature | Included behavior |
@@ -93,7 +124,7 @@ For migration, replace `WebRTCCamera::begin(board)` with `WebRTCCamera::begin(co
 | Browser viewer | Served directly by the board; reassembles and displays JPEG frames |
 | Microphone | XIAO Sense onboard PDM microphone, sent as an 8 kHz PCMU/G.711 audio track |
 | Controls | Ring, accept, end call, and an open-door command placeholder |
-| Signaling | Local HTTP with a viewer token |
+| Signaling | Doorbell: local HTTP with a viewer token. SinricProCamera: SinricPro cloud, with STUN/TURN |
 
 JPEG camera streaming requires the included viewer; it is not a native WebRTC video track. H.264 encoding, speaker playback, two-way audio, and acoustic echo cancellation are not included. Microphones on other board profiles are disabled by default.
 
