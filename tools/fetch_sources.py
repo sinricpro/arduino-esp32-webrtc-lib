@@ -18,6 +18,27 @@ SOURCES = [
 def git(path, *args):
     return subprocess.check_output(['git', '-C', str(path), *args], text=True).strip()
 
+# Repository root, not build-support/: .gitignore excludes that whole tree, so patches kept there
+# would never reach CI and it would silently build stock sources.
+PATCHES = ROOT.parents[1] / 'patches'
+
+def apply_patches(path, relative):
+    """Re-apply local fixes to a pinned checkout, skipping any already present.
+
+    Without this a local build and CI would compile different sources while reporting the same
+    commit, because the commit check below passes either way.
+    """
+    directory = PATCHES / relative
+    if not directory.is_dir():
+        return
+    for patch in sorted(directory.glob('*.patch')):
+        if subprocess.run(['git', '-C', str(path), 'apply', '--reverse', '--check', str(patch)],
+                          capture_output=True).returncode == 0:
+            print(' ', patch.name, 'already applied')
+            continue
+        subprocess.check_call(['git', '-C', str(path), 'apply', str(patch)])
+        print(' ', patch.name, 'applied')
+
 for relative, url, commit in SOURCES:
     path = ROOT / relative
     if not path.exists():
@@ -29,5 +50,6 @@ for relative, url, commit in SOURCES:
     if git(path, 'rev-parse', 'HEAD') != commit:
         raise SystemExit(f'{path}: different checkout; preserve it and choose a clean workspace.')
     print(relative, commit)
+    apply_patches(path, relative)
 git(ROOT / 'esp-idf', 'submodule', 'update', '--init', '--depth', '1', 'components/mbedtls/mbedtls')
 verify_sources(args.core_version)

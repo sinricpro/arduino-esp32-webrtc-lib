@@ -1,0 +1,40 @@
+diff --git a/components/esp_peer/src/transport/udp.c b/components/esp_peer/src/transport/udp.c
+index c7fb59d..357528c 100644
+--- a/components/esp_peer/src/transport/udp.c
++++ b/components/esp_peer/src/transport/udp.c
+@@ -219,7 +219,10 @@ RETRY:
+     ret = sendto(fd, buf, len, 0, (struct sockaddr *)&addr_storage, addr_len);
+     measure_stop("sendto");
+     if (ret < 0) {
+-        if ((errno == ENOBUFS || errno == 12) && retry_count < 2) {
++        // Captured immediately: the select() below overwrites errno, so the retry test and the
++        // report would otherwise inspect the wrong error on the second pass.
++        int send_errno = errno;
++        if ((send_errno == ENOBUFS || send_errno == 12) && retry_count < 2) {
+             media_lib_thread_sleep(20);
+             fd_set write_set;
+             struct timeval tv = { .tv_usec = 5000 };
+@@ -233,12 +236,21 @@ RETRY:
+             }
+             goto RETRY;
+         }
+-        // Special return value so that can retry
++        // Special return value so that can retry; a caller that treats this as "try later" forever
++        // is indistinguishable from a hung link while it stays silent. ESP_LOGE because the Arduino
++        // SDK builds with CONFIG_LOG_MAXIMUM_LEVEL=1, which strips every level below ERROR.
+         if (retry_count > 0) {
++            // Chronic on a weak link - dozens per second - so report the first and every 64th.
++            // Enough to prove the condition without flooding the console.
++            static uint32_t deferred = 0;
++            if ((++deferred & 63) == 1) {
++                ESP_LOGE(TAG, "sendto deferred (%u so far): errno %d (%s), %d bytes",
++                         (unsigned)deferred, send_errno, strerror(send_errno), len);
++            }
+             udp_dec_user(udp_socket);
+             return -200;
+         }
+-        ESP_LOGE(TAG, "Failed to sendto: %d %s", errno, strerror(errno));
++        ESP_LOGE(TAG, "Failed to sendto: %d %s", send_errno, strerror(send_errno));
+         ret = -1;
+     }
+     udp_dec_user(udp_socket);

@@ -62,13 +62,13 @@ The compile matrix builds all ten Doorbell profiles plus HardwareCheck. Board se
 | Intermediate objects | `build/arduino-<core>/objects/<target>/` |
 | Staged library | `build/arduino-<core>/SinricProWebRTC/` |
 | Compiler logs | `build/arduino-<core>/compile/*.log` |
-| Installable ZIP | `dist/SinricProWebRTC-0.1.0-arduino-<core>.zip` |
+| Installable ZIP | `dist/SinricProWebRTC-<version>-arduino-<core>.zip` |
 
-The staged library contains both processor archives, an exact core guard in `SinricProWebRTCVersion.h`, matching Arduino metadata, and a README identifying the variant. The checkout's baseline archives and installed library are not replaced by this process.
+The staged library contains both processor archives, an exact core guard in `SinricProWebRTCVersion.h`, matching Arduino metadata, and a README identifying the variant. The version comes from `library.properties`; a release build stops if it disagrees with the tag.
 
 Keep Wi-Fi placeholders in the distributed example. Configure credentials only in your local sketch copy. For hardware validation, install the generated variant, upload HardwareCheck and Doorbell on the intended board, then test camera, audio where available, connection, disconnect/reconnect, and sustained streaming.
 
-To package the existing checkout's baseline 3.3.11 binaries without rebuilding, use `python tools/package.py` without `--core-version`. That creates the original unqualified ZIP. To package new builds, always pass the core version.
+The repository tracks no archives, so every tool that links or packages them needs a staged build; `--core-version` selects which one.
 
 ## PlatformIO
 
@@ -83,9 +83,16 @@ The project reuses the Doorbell sketch rather than maintaining a second implemen
 
 ## GitHub Actions
 
-The workflow runs an independent Windows job for each core version on pull requests, default-branch pushes, and manual dispatch. Each job installs its core, builds both archives, stages the library, runs the checks, and publishes a core-labeled ZIP artifact. A failed matrix job does not cancel the other version. The 3.3.11 job also compiles the PlatformIO ESP32 and ESP32-S3 environments.
+The workflow runs an independent Windows job for each core version on pull requests, default-branch pushes, published releases, and manual dispatch. Each job installs its core, builds both archives, stages the library, runs the checks, and publishes a core-labeled ZIP artifact. A failed matrix job does not cancel the other version. The 3.3.11 job also compiles the PlatformIO ESP32 and ESP32-S3 environments.
 
-Download the artifact for your core, extract the installable ZIP from it, and install that ZIP through Arduino IDE. CI does not publish a release or test physical hardware.
+Artifacts from non-release runs expire and require a GitHub login, so they serve to check a branch rather than to distribute. CI does not test physical hardware.
+
+## Cutting a release
+
+1. Update `version` in `library.properties` and `library.json`, then commit.
+2. Publish a GitHub release whose tag is exactly that version.
+
+The matrix rebuilds every core version from the tagged commit, and a separate `publish` job attaches each `SinricProWebRTC-<version>-arduino-<core>.zip` to the release. Only that job holds a write token; the build jobs stay read-only. A tag disagreeing with `library.properties` fails within the first minute, before any archive is built.
 
 ## Add another core version
 

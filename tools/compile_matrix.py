@@ -5,18 +5,17 @@ import shutil
 import subprocess
 import argparse
 import re
-from build_config import PROFILES, library_dir, workspace, verify_archive
-root = Path(__file__).resolve().parents[1]
+from build_config import add_core_argument, library_dir, workspace, verify_archive
 cli = os.environ.get('ARDUINO_CLI') or shutil.which('arduino-cli') or str(
     Path(os.environ['LOCALAPPDATA']) / 'Programs/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe')
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--core-version', choices=PROFILES)
+add_core_argument(parser)
 options = parser.parse_args()
-library = library_dir(options.core_version) if options.core_version else root
-build_root = workspace(options.core_version) / 'compile' if options.core_version else root / 'build'
-if options.core_version:
-    for target in ('esp32', 'esp32s3'):
-        verify_archive(options.core_version, target)
+# The checkout carries no archives to link against, so always compile the staged library.
+library = library_dir(options.core_version)
+build_root = workspace(options.core_version) / 'compile'
+for target in ('esp32', 'esp32s3'):
+    verify_archive(options.core_version, target)
 boards = [
     ('xiao', 2, 'XIAO_ESP32S3:PSRAM=opi'),
     ('esp-eye', 1, 'esp32:PSRAM=enabled,PartitionScheme=huge_app'),

@@ -12,7 +12,9 @@ def prepare(core):
     for f in package_files(ROOT):
         relative = f.relative_to(ROOT)
         if relative.parts[:2] in [('src', 'esp32'), ('src', 'esp32s3')]:
-            continue  # Never copy the checkout's baseline archives into another variant.
+            # Archives are untracked build output, so anything here is a local leftover that may
+            # belong to a different core; only the ones just built for this one may be staged.
+            continue
         target = dest / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(f, target)

@@ -6,18 +6,19 @@ The IDF dependencies are bundled as precompiled static libraries (`.a`). No ESP-
 
 ## Requirements
 
-- **Arduino ESP32 3.3.11 or 3.3.10**, with the matching library ZIP. The repository checkout contains the 3.3.11 variant. Precompiled dependencies require an exact core match; see [BUILDING.md](BUILDING.md).
+- **Arduino ESP32 3.3.11 or 3.3.10**, with the matching library ZIP. Precompiled dependencies require an exact core match; see [BUILDING.md](BUILDING.md).
 - An ESP32 or ESP32-S3 camera board with **PSRAM enabled**.
 - An application partition of at least **3 MB**.
+- A Wi-Fi signal of **−75 dBm or better** at the board. Below about −80 dBm the DTLS handshake cannot complete, because the Wi-Fi driver's transmit buffers stop recycling fast enough; free heap looks healthy throughout. See [VALIDATION.md](VALIDATION.md).
 - Chrome or Edge on the same local network as the board.
 
 ## Installation
 
-1. Download the library ZIP matching your Arduino core from a successful GitHub Actions build. Each artifact contains an installable `SinricProWebRTC-0.1.0-arduino-<version>.zip`.
-2. In Arduino IDE, select **Sketch > Include Library > Add .ZIP Library** and choose that inner ZIP. Install one variant at a time.
+1. Download `SinricProWebRTC-<version>-arduino-<core>.zip` for your Arduino core from the [latest release](https://github.com/sinricpro/arduino-esp32-webrtc-lib/releases/latest).
+2. In Arduino IDE, select **Sketch > Include Library > Add .ZIP Library** and choose that ZIP. Install one variant at a time.
 3. Open **File > Examples > SinricProWebRTC > Doorbell**.
 
-To use the baseline 3.3.11 variant, you can also generate a ZIP with `python tools/package.py`. Alternatively, copy this repository into your sketchbook's `libraries/SinricProWebRTC` folder. Python is only needed to generate the ZIP, not to use the library.
+The repository holds sources only — the precompiled archives are release assets. Cloning it into `libraries/` does not give a working library; use a release ZIP, or build the archives yourself following [BUILDING.md](BUILDING.md).
 
 ## Board setup
 
@@ -138,6 +139,7 @@ The example uses direct connections on a trusted LAN. HTTP signaling and the vie
 SinricProWebRTC peer;
 ```
 
+The header is named `SinricProWebRTC.h`; the wrapper class is `SinricProWebRTC`.
 
 Connect Wi-Fi first, then configure an `esp_peer_cfg_t` with your callbacks and ICE settings. The [Doorbell example](examples/Doorbell/Doorbell.ino) provides a complete integration.
 
@@ -170,17 +172,23 @@ The [HardwareCheck example](examples/HardwareCheck/HardwareCheck.ino) provides c
 
 ## PlatformIO
 
-Use the provided [PlatformIO project](examples/PlatformIO/platformio.ini). It links this library locally and reuses `Doorbell.ino`, `Settings.h`, and `CameraConfig.h`:
+Use the provided [PlatformIO project](examples/PlatformIO/platformio.ini). It links this library locally and reuses `Doorbell.ino`, `Settings.h`, and `CameraConfig.h`. Run it from a staged build: the project links the library root, and the checkout carries no archives.
 
 ```powershell
-pio run --project-dir examples/PlatformIO -e esp32cam
-pio run --project-dir examples/PlatformIO -e xiao_s3_sense
-pio run --project-dir examples/PlatformIO -e lilygo_camera
+python -m platformio run --project-dir build/arduino-3.3.11/SinricProWebRTC/examples/PlatformIO -e esp32cam
+python -m platformio run --project-dir build/arduino-3.3.11/SinricProWebRTC/examples/PlatformIO -e xiao_s3_sense
+python -m platformio run --project-dir build/arduino-3.3.11/SinricProWebRTC/examples/PlatformIO -e lilygo_camera
 ```
 
-The project pins **pioarduino 55.03.311**, which supplies Arduino ESP32 **3.3.11**. Use the 3.3.11 library variant with it. The project's build flags select the board profile, overriding the default in `Settings.h`. Upload with `pio run --project-dir examples/PlatformIO -e esp32cam -t upload`; use `pio device monitor --baud 115200` for logs.
+The project pins **pioarduino 55.03.311**, which supplies Arduino ESP32 **3.3.11**. Use the 3.3.11 library variant with it. The project's build flags select the board profile, overriding the default in `Settings.h`. Append `-t upload` to flash; use `pio device monitor --baud 115200` for logs.
 
-For your own project, extract the matching library ZIP into `lib/SinricProWebRTC/`, use the pinned platform URL from the example, and enable the appropriate PSRAM and application partition settings. `library.json` automatically links the archive for your MCU. The version guard rejects a mismatched Arduino framework. PlatformIO integration currently targets 3.3.11; the Arduino CLI workflow builds both core versions.
+For your own project, depend on a release asset rather than on this repository, which ships no archives:
+
+```ini
+lib_deps = https://github.com/sinricpro/arduino-esp32-webrtc-lib/releases/download/<version>/SinricProWebRTC-<version>-arduino-3.3.11.zip
+```
+
+Use the pinned platform URL from the example and enable the appropriate PSRAM and application partition settings. `library.json` automatically links the archive for your MCU, and the version guard rejects a mismatched Arduino framework. PlatformIO integration currently targets 3.3.11; the Arduino CLI workflow builds both core versions.
 
 ## Build from source
 
@@ -200,7 +208,7 @@ python tools/package.py --core-version $coreVersion
 
 Run one command at a time and stop on errors. The scripts use Arduino's installed SDK and compiler; no separate IDF or WSL setup is needed. `ARDUINO_DIRECTORIES_DATA` can select an isolated Arduino package directory, and `ARDUINO_CLI` can specify the CLI executable.
 
-Each core gets separate sources, build output, archive manifests, and a ZIP with an exact version guard. Builds do not overwrite the checkout's baseline archives. The available adapter, transport, libSRTP, and private Mbed TLS sources are compiled; Espressif's supplied peer-engine binary is included. See [BUILDING.md](BUILDING.md) for setup and validation details.
+Each core gets separate sources, build output, archive manifests, and a ZIP with an exact version guard. Builds write archives into `build/` and package them into `dist/`; the repository itself tracks none. The available adapter, transport, libSRTP, and private Mbed TLS sources are compiled; Espressif's supplied peer-engine binary is included. See [BUILDING.md](BUILDING.md) for setup and validation details.
 
 ## Supporting multiple Arduino core versions
 
@@ -208,11 +216,11 @@ Each core gets separate sources, build output, archive manifests, and a ZIP with
 
 Arduino selects precompiled archives by processor, not core version. Install the ZIP matching your core and keep one variant installed at a time. Removing the guard does not make incompatible binaries safe to use.
 
-## Automated builds
+## Automated builds and releases
 
-[build.yml](.github/workflows/build.yml) runs on PRs, default-branch pushes (including merges), and manual dispatch. Separate Windows jobs rebuild each core's ESP32 and ESP32-S3 archives, check crypto isolation, test the viewer, and compile all ten Doorbell profiles plus HardwareCheck. The 3.3.11 job also builds the PlatformIO ESP32 and ESP32-S3 examples.
+[build.yml](.github/workflows/build.yml) runs on PRs, default-branch pushes (including merges), published releases, and manual dispatch. Separate Windows jobs rebuild each core's ESP32 and ESP32-S3 archives, check crypto isolation, test the viewer, and compile all ten Doorbell profiles plus HardwareCheck. The 3.3.11 job also builds the PlatformIO ESP32 and ESP32-S3 examples.
 
-Each successful job uploads `SinricProWebRTC-arduino-<core>-<commit>`, containing an installable ZIP. Logs are uploaded separately. CI does not flash boards or publish releases; hardware validation is recorded separately.
+Publishing a release rebuilds every core version from the tagged commit and attaches each `SinricProWebRTC-<version>-arduino-<core>.zip` to it, so the binaries are produced by CI rather than committed. A tag that disagrees with `library.properties` fails before any archive is built. Artifacts from ordinary runs expire and need a GitHub login, so use a release for installation. CI does not flash boards; hardware validation is recorded separately.
 
 ## Does it use a server?
 

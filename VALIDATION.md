@@ -153,7 +153,7 @@ opt-in and does not scan the network or upload firmware.
 | Check | Status |
 | --- | --- |
 | Example compiles for ESP32 (AI-Thinker) and ESP32-S3 (XIAO profile) on 3.3.11 | PASS: 1,705,572 / 1,640,754 bytes, huge_app partition |
-| Portal viewer on the same LAN renders frames | Not yet verified |
+| Portal viewer on the same LAN renders frames | PASS (2026-09-13, AI-Thinker ESP32-CAM at QVGA; see findings below) |
 | App on mobile data (CGNAT) connects via `srflx` or `relay` candidate | Not yet verified |
 | Forced relay (`iceTransportPolicy: 'relay'`) over TURN UDP 3478 | Not yet verified |
 | TURNS over TCP 443 on a UDP-blocked network | Not yet verified |
@@ -164,3 +164,34 @@ opt-in and does not scan the network or upload firmware.
 | Automatic quality steps down on a throttled link and recovers | Not yet verified |
 | XIAO ESP32S3 Sense microphone audible in portal and app | Not yet verified (mic path compiles) |
 | Firmware before SDK 5.1.0 shows the update-firmware message | Not yet verified |
+
+## Classic ESP32 bring-up findings — 2026-09-13
+
+Portal live view works on an AI-Thinker ESP32-CAM, but only after two constraints were found. Both
+present as the same misleading symptom and neither reports a useful error on its own.
+
+**Wi-Fi signal is a hard requirement.** At −85 to −88 dBm the DTLS handshake never completes. The
+Wi-Fi driver's transmit buffers are a fixed count released only when a frame is acknowledged, so a
+weak link leaves none free and `sendto()` returns `ENOMEM` even for 88-byte STUN packets — while
+free heap reads ~49 kB with a 28 kB largest block, so every memory metric looks healthy. At −79 to
+−85 dBm the same board streamed for 90 s and lost 1 frame of roughly 450. Target **−75 dBm or
+better**; `SinricProWebRTCSession` now appends the reading to the viewer's error message below that
+threshold. An ESP32-CAM on its PCB trace antenna, 10–15 m from the access point through walls,
+measured −85 dBm and did not work.
+
+**Data-channel caches must stay small on classic ESP32.** Once Wi-Fi and the SinricPro TLS socket
+are up, a single ~28 kB contiguous internal block remains. The former 16 kB send / 8 kB receive
+caches consumed it, leaving the Wi-Fi driver unable to allocate transmit buffers at all. The example
+now uses 6 kB / 3 kB, which lifted the observed heap floor from 31.6 kB to 49.7 kB and allowed the
+handshake to complete. `rtp_cfg.send_pool_size` is also reduced when no audio track is negotiated —
+it must never be set to `0`, which selects esp_peer's 400 kB default.
+
+Symptoms worth recognising: the portal shows one frozen frame while the device logs `streaming:
+yes`, or the data channel stays at `connecting` with `dtlsState=connecting` in `chrome://webrtc-internals`.
+
+**Vendor patch.** `patches/esp-webrtc-solution/esp_peer-udp-errno.patch` fixes an upstream defect
+where `select()` overwrote `errno` between retries, so the `ENOBUFS`/`ENOMEM` retry test read an
+unrelated value, and adds a rate-limited log to the otherwise silent `-200` return.
+`tools/fetch_sources.py` applies it after checkout and `build-info.json` records it under `patches`,
+so a patched archive is no longer indistinguishable from a stock one. Reported upstream on
+[esp-webrtc-solution#75](https://github.com/espressif/esp-webrtc-solution/issues/75#issuecomment-5654157318).
