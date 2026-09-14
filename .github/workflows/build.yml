@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: ['**']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -42,6 +44,16 @@ jobs:
       - uses: arduino/setup-arduino-cli@v2
         with:
           version: '1.2.2'
+      # Before the 90-minute build, not after: a mismatch here would otherwise surface as release
+      # assets labelled with the wrong version. The tag arrives via env so it cannot alter the script.
+      - name: Check the tag matches library.properties
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $version = python -c "import sys; sys.path.insert(0, 'tools'); import build_config; print(build_config.library_version())"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($version -ne $env:TAG) { throw "Tag $env:TAG does not match library.properties $version" }
       - name: Install ESP32 core
         run: |
           arduino-cli config init
@@ -88,3 +100,25 @@ jobs:
           name: compiler-logs-arduino-${{ matrix.core }}-${{ github.sha }}
           path: build/arduino-${{ matrix.core }}/compile/*.log
           if-no-files-found: ignore
+
+  publish:
+    needs: build
+    if: github.event_name == 'release'
+    name: Attach ZIPs to the release
+    runs-on: ubuntu-latest
+    # Scoped to this job so the long build matrix keeps a read-only token. GitHub Actions does not
+    # accept expressions under permissions:, so a conditional on the build job is not an option.
+    permissions:
+      contents: write
+    steps:
+      - name: Collect the per-core ZIPs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: SinricProWebRTC-arduino-*-${{ github.sha }}
+          merge-multiple: true
+          path: dist
+      - name: Upload them as release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/*.zip --clobber --repo "$GITHUB_REPOSITORY"

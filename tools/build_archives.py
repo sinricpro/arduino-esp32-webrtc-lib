@@ -10,7 +10,8 @@ import subprocess
 import argparse
 import hashlib
 import json
-from build_config import add_core_argument, profile, data_dir, workspace, library_dir, sources_dir, verify_sources
+from build_config import (add_core_argument, profile, data_dir, workspace, library_dir, sources_dir,
+                          source_patches, verify_sources)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -161,6 +162,9 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
         'private_symbols': len(symbols),
         'sources': {str(p.relative_to(ROOT)): run(['git', '-C', p, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
                     for p in [peer.parents[1], mbed, srtp.parents[1]]},
+        # Empty for a stock build; non-empty names every locally patched file, so the commits above
+        # are never mistaken for a complete description of what went into the archive.
+        'patches': source_patches(args.core_version),
     }
     (dest / 'build-info.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Built {archive} ({archive.stat().st_size} bytes)')

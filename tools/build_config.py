@@ -29,6 +29,18 @@ def package_files(root):
                         yield file
 
 
+def library_version():
+    """Release version, read from library.properties so nothing restates it.
+
+    A second copy in the packager silently outlived a version bump, naming every ZIP after the
+    previous release.
+    """
+    for line in (ROOT / 'library.properties').read_text().splitlines():
+        if line.startswith('version='):
+            return line.split('=', 1)[1].strip()
+    raise ValueError('library.properties: no version= line')
+
+
 def add_core_argument(parser):
     parser.add_argument('--core-version', choices=PROFILES, default=DEFAULT_CORE)
 
@@ -67,6 +79,26 @@ def verify_sources(core):
             ['git', '-C', str(sources_dir(core) / relative), 'rev-parse', 'HEAD'], text=True).strip()
         if actual != revision:
             raise ValueError(f'{relative}: expected {revision}, found {actual}')
+
+
+def source_patches(core):
+    """Tracked files modified in the pinned checkouts, for the build manifest.
+
+    verify_sources() compares commits only, so a patched tree passes it unchanged. Without this
+    record a patched archive and a stock one carry identical metadata.
+    """
+    modified = {}
+    for relative in source_revisions(core):
+        changed = subprocess.check_output(
+            ['git', '-C', str(sources_dir(core) / relative), 'status', '--porcelain',
+             '--untracked-files=no'], text=True)
+        # Porcelain lines are two status columns then a space, so the path starts at index 3.
+        # Stripping the whole output first would remove the first line's leading column and
+        # truncate its path by a character.
+        paths = sorted(line[3:] for line in changed.splitlines() if line.strip())
+        if paths:
+            modified[relative] = paths
+    return modified
 
 
 def version_header(core):
