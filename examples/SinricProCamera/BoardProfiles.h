@@ -1,0 +1,16 @@
+#pragma once
+
+// Camera profile IDs are shared by Settings.h and the compile matrix.
+#define BOARD_ESP_EYE 1
+#define BOARD_XIAO_S3_SENSE 2
+#define BOARD_FREENOVE_S3 3
+#define BOARD_M5CAMERA 4
+#define BOARD_M5CAMERA_B 5
+#define BOARD_AI_THINKER 6
+#define BOARD_WROVER_KIT 7
+#define BOARD_ESP32S3_WROOM 8
+#define BOARD_ESP32S3_GOOUUU 9
+#define BOARD_LILYGO_CAMERA 10
+
+#define BOARD_ESP32CAM_AITHINKER BOARD_AI_THINKER
+#define BOARD_ESP32S3_XIAO BOARD_XIAO_S3_SENSE

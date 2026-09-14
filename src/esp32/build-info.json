@@ -11,11 +11,16 @@
     "peer_commit": "c8650846b512e6e1375e5f78c1c41619b8d645eb",
     "adf_commit": "da256e5f462a8e010667d35314a5ba5cdc4a8d9a"
   },
-  "sha256": "b90a79cc61f9444314112f831d3015e737ca0ae91f0f205cac4cca862d18978a",
+  "sha256": "2727b1eb3eb1cfead709ae4b6fa6da7a8e3d19c3fe1926be300cb3c8634919e7",
   "private_symbols": 1333,
   "sources": {
     "build-support\\sources-3.3.11\\esp-webrtc-solution": "c8650846b512e6e1375e5f78c1c41619b8d645eb",
     "build-support\\sources-3.3.11\\esp-idf\\components\\mbedtls\\mbedtls": "9d669eadb1955d348986b9280156710aaaadf79f",
     "build-support\\sources-3.3.11\\esp-adf-libs": "da256e5f462a8e010667d35314a5ba5cdc4a8d9a"
+  },
+  "patches": {
+    "esp-webrtc-solution": [
+      "components/esp_peer/src/transport/udp.c"
+    ]
   }
 }

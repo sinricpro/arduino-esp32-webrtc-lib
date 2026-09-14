@@ -135,10 +135,9 @@ The example uses direct connections on a trusted LAN. HTTP signaling and the vie
 ```cpp
 #include <SinricProWebRTC.h>
 
-SinricWebRTC peer;
+SinricProWebRTC peer;
 ```
 
-The header is named `SinricProWebRTC.h`; the wrapper class is `SinricWebRTC`.
 
 Connect Wi-Fi first, then configure an `esp_peer_cfg_t` with your callbacks and ICE settings. The [Doorbell example](examples/Doorbell/Doorbell.ino) provides a complete integration.
 

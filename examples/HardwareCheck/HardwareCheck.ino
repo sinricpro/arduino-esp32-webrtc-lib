@@ -7,7 +7,7 @@
 // Change for your board. No Wi-Fi credentials or Internet connection required.
 static constexpr auto BOARD = CameraSetup::Board::LilygoCamera;
 SET_LOOP_TASK_STACK_SIZE(24 * 1024);
-SinricWebRTC rtc;
+SinricProWebRTC rtc;
 bool gotSdp = false;
 int messages(esp_peer_msg_t *msg, void *) {
     if (msg->type == ESP_PEER_MSG_TYPE_SDP) {

@@ -14,7 +14,7 @@ I2SClass microphone;
 
 SET_LOOP_TASK_STACK_SIZE(24 * 1024);
 WebServer server(80);
-SinricWebRTC rtc;
+SinricProWebRTC rtc;
 bool channelReady = false, streaming = false, closeRequested = false;
 uint16_t channelId = 0;
 std::atomic<uint32_t> lastActivity{0};
@@ -284,7 +284,7 @@ void audioLoop() {
         uint8_t encoded[160];
         for (int i = 0; i < 160; ++i) {
             int16_t sample = (static_cast<int32_t>(pcm[2 * i]) + pcm[2 * i + 1]) / 2;
-            encoded[i] = SinricWebRTC::encodeMuLaw(sample);
+            encoded[i] = SinricProWebRTC::encodeMuLaw(sample);
         }
 
         rtc.sendAudio(encoded, sizeof(encoded), pts);

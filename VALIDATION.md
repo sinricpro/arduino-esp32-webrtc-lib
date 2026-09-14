@@ -147,3 +147,20 @@ COM6` to exercise the ring command. The smoke test connects, accepts a call,
 requires successfully rendered JPEG frames, records WebRTC transport statistics,
 checks commands and stream stop, and reconnects. It is intentionally
 opt-in and does not scan the network or upload firmware.
+
+## SinricPro integration (SinricProCamera example) — pending hardware checks
+
+| Check | Status |
+| --- | --- |
+| Example compiles for ESP32 (AI-Thinker) and ESP32-S3 (XIAO profile) on 3.3.11 | PASS: 1,705,572 / 1,640,754 bytes, huge_app partition |
+| Portal viewer on the same LAN renders frames | Not yet verified |
+| App on mobile data (CGNAT) connects via `srflx` or `relay` candidate | Not yet verified |
+| Forced relay (`iceTransportPolicy: 'relay'`) over TURN UDP 3478 | Not yet verified |
+| TURNS over TCP 443 on a UDP-blocked network | Not yet verified |
+| Offer-to-answer time under 4 s with TURN allocation | Not yet verified |
+| Classic ESP32: heap stable for 30 min with TLS websocket + DTLS active | Not yet verified |
+| Second viewer replaces the first cleanly | Not yet verified |
+| Controls: resolution (QVGA..SVGA), fps, flash (AI-Thinker GPIO 4), flip, mirror apply live | Not yet verified |
+| Automatic quality steps down on a throttled link and recovers | Not yet verified |
+| XIAO ESP32S3 Sense microphone audible in portal and app | Not yet verified (mic path compiles) |
+| Firmware before SDK 5.1.0 shows the update-firmware message | Not yet verified |

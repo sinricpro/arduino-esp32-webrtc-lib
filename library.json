@@ -1,6 +1,6 @@
 {
   "name": "SinricProWebRTC",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WebRTC peer connections and camera doorbell examples for ESP32 and ESP32-S3. Install archives matching your Arduino core version.",
   "keywords": ["webrtc", "camera", "doorbell", "esp32"],
   "repository": {

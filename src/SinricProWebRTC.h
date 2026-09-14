@@ -11,12 +11,12 @@
 
 // All methods and callbacks run on the caller's task. Call loop() frequently.
 // Do not call begin/end from a callback; defer lifecycle changes to your loop.
-class SinricWebRTC {
+class SinricProWebRTC {
 public:
-    SinricWebRTC() = default;
-    ~SinricWebRTC() { end(); }
-    SinricWebRTC(const SinricWebRTC&) = delete;
-    SinricWebRTC& operator=(const SinricWebRTC&) = delete;
+    SinricProWebRTC() = default;
+    ~SinricProWebRTC() { end(); }
+    SinricProWebRTC(const SinricProWebRTC&) = delete;
+    SinricProWebRTC& operator=(const SinricProWebRTC&) = delete;
     // Config and callback context must remain valid until end(). Default extra
     // config is supplied when extra_cfg is null. WiFi must already be connected.
     int begin(esp_peer_cfg_t config);
