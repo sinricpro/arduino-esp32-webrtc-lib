@@ -16,6 +16,27 @@ constexpr size_t kMaxControlBytes = 512;
 constexpr int32_t kWeakSignalDbm = -75;
 constexpr size_t kAudioFrameBytes = 160;  // 20 ms of 8 kHz PCMU
 constexpr uint32_t kAudioFrameMs = 20;
+
+// A viewer that can render a video track offers H.264. Older viewers offer no video at all and
+// keep the JPEG path, which is what makes this backward compatible.
+bool offerWantsH264(const char *offer) {
+    return strstr(offer, "m=video") != nullptr && strstr(offer, "H264") != nullptr;
+}
+
+framesize_t h264FrameSize(uint16_t width, const char **name) {
+    if (width <= 160) {
+        *name = "QQVGA";
+        return FRAMESIZE_QQVGA;
+    }
+    if (width <= 320) {
+        *name = "QVGA";
+        return FRAMESIZE_QVGA;
+    }
+    // Alexa and Google Home both refuse anything below 480p, so VGA is the smallest size that can
+    // reach them; the software encoder manages it only at a low frame rate.
+    *name = "VGA";
+    return FRAMESIZE_VGA;
+}
 }  // namespace
 
 bool SinricProWebRTCSession::begin(const Config &config) {
@@ -131,6 +152,10 @@ void SinricProWebRTCSession::run() {
         if (rtc_.handle()) {
             rtc_.loop();
 
+            // Independent of the DataChannel: video flows as soon as the peer is connected.
+            if (h264_.running())
+                h264_.send(rtc_);
+
             const uint32_t now = millis();
             if (!answerPublished_) {
                 if (localSdp_.length() && now - lastSignal_ >= kCandidateSettleMs) {
@@ -162,6 +187,14 @@ void SinricProWebRTCSession::streamToViewer() {
     if (!capabilitiesPending_ && statePending_ && rtc_.sendText(channelId_, controls_.stateJson().c_str()) == 0)
         statePending_ = false;
 
+    if (videoActive_) {
+        // The track carries the video; the DataChannel is left to the control protocol.
+        h264_.setFps(static_cast<uint8_t>(1000 / std::max<uint32_t>(controls_.frameIntervalMs(), 1)));
+        if (controls_.takeStateChanged())
+            statePending_ = true;
+        return;
+    }
+
     streamer_.setFrameInterval(controls_.frameIntervalMs());
     WebRTCJpegStreamer::Result result = streamer_.loop(rtc_, channelId_);
     if (result == WebRTCJpegStreamer::Result::Completed || result == WebRTCJpegStreamer::Result::Abandoned) {
@@ -187,6 +220,54 @@ void SinricProWebRTCSession::pollAudio() {
     if (audioActive_ && channelOpen_)
         rtc_.sendAudio(pcmu, sizeof(pcmu), audioPts_);
     audioPts_ += kAudioFrameMs;
+}
+
+// The encoder reads YUV422 and the JPEG path needs JPEG, so the camera is re-initialised for the
+// session and restored afterwards. Re-initialising resets the sensor, hence the reapply.
+bool SinricProWebRTCSession::selectCameraFormat(bool yuv) {
+    camera_config_t cfg = config_.cameraConfig;
+    if (!cfg.xclk_freq_hz) {
+        log_e("Config::cameraConfig is required for the H.264 video track");
+        return false;
+    }
+
+    const char *name = nullptr;
+    if (yuv) {
+        cfg.pixel_format = PIXFORMAT_YUV422;
+        cfg.frame_size = h264FrameSize(config_.h264Width, &name);
+        cfg.fb_count = 2;
+        cfg.grab_mode = CAMERA_GRAB_LATEST;
+    }
+
+    const esp_err_t err = esp_camera_reconfigure(&cfg);
+    if (err != ESP_OK) {
+        log_e("Camera reconfigure failed: 0x%x", err);
+        return false;
+    }
+    controls_.reapply(!yuv);
+    controls_.setH264(yuv, name, config_.h264Fps);
+    return true;
+}
+
+void SinricProWebRTCSession::startH264() {
+    WebRTCH264Streamer::Config cfg;
+    cfg.width = config_.h264Width;
+    cfg.height = config_.h264Height;
+    cfg.fps = config_.h264Fps;
+    cfg.bitrate = config_.h264Bitrate;
+    cfg.taskPriority = config_.taskPriority;
+    if (!h264_.begin(cfg)) {
+        log_e("H.264 encoder failed to start");
+        closeRequested_ = true;
+    }
+}
+
+void SinricProWebRTCSession::stopH264() {
+    h264_.end();
+    if (videoActive_) {
+        videoActive_ = false;
+        selectCameraFormat(false);
+    }
 }
 
 void SinricProWebRTCSession::startPeer(Command &cmd) {
@@ -232,6 +313,12 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
         cfg.audio_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY;
     }
 
+    videoActive_ = config_.h264 && offerWantsH264(cmd.offer) && selectCameraFormat(true);
+    if (videoActive_) {
+        cfg.video_info = {ESP_PEER_VIDEO_CODEC_H264, config_.h264Width, config_.h264Height, config_.h264Fps};
+        cfg.video_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY;
+    }
+
     peerDefaults_ = {};
     peerDefaults_.agent_recv_timeout = 10;
     peerDefaults_.data_ch_cfg.send_cache_size = config_.dataChannelSendCache;
@@ -239,8 +326,14 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     // RTP carries only the optional PCMU track, so a data-channel-only session would otherwise
     // strand internal RAM that the Wi-Fi driver needs for its dynamic TX buffers. Zero is not an
     // option here: esp_peer reads it as "use the 400 kB default".
-    peerDefaults_.rtp_cfg.send_pool_size = audioActive_ ? 48 * 1024 : 4 * 1024;
-    peerDefaults_.rtp_cfg.send_queue_num = audioActive_ ? 64 : 8;
+    // An encoded frame becomes some 40 RTP packets, which is what the video pool is sized for.
+    if (videoActive_) {
+        peerDefaults_.rtp_cfg.send_pool_size = 64 * 1024;
+        peerDefaults_.rtp_cfg.send_queue_num = 64;
+    } else {
+        peerDefaults_.rtp_cfg.send_pool_size = audioActive_ ? 48 * 1024 : 4 * 1024;
+        peerDefaults_.rtp_cfg.send_queue_num = audioActive_ ? 64 : 8;
+    }
     cfg.extra_cfg = &peerDefaults_;
     cfg.extra_size = sizeof(peerDefaults_);
 
@@ -260,6 +353,8 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
 
 void SinricProWebRTCSession::closePeer() {
     streamer_.reset();
+    // Before the peer closes: the encoder task holds camera buffers while it runs.
+    stopH264();
     controls_.viewerLeft();
     channelOpen_ = false;
     closeRequested_ = false;
@@ -338,6 +433,11 @@ int SinricProWebRTCSession::onState(esp_peer_state_t state, void *ctx) {
     log_d("Peer state: %d", state);
     if (state == ESP_PEER_STATE_DISCONNECTED || state == ESP_PEER_STATE_CONNECT_FAILED)
         self->closeRequested_ = true;
+    // Encoding starts only once there is somewhere to send frames.
+    else if (state == ESP_PEER_STATE_CONNECTED && self->videoActive_ && !self->h264_.running())
+        self->startH264();
+    else if (state == ESP_PEER_STATE_VIDEO_PLI_RECEIVED)
+        self->h264_.requestKeyframe();
     return 0;
 }
 

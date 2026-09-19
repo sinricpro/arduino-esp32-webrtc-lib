@@ -1,7 +1,10 @@
 """Fetch exact sources used by build_archives.py. Requires Git and Python."""
 from pathlib import Path
+import hashlib
 import subprocess
 import argparse
+import urllib.request
+import zipfile
 from build_config import add_core_argument, profile, sources_dir, verify_sources
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -53,3 +56,22 @@ for relative, url, commit in SOURCES:
     apply_patches(path, relative)
 git(ROOT / 'esp-idf', 'submodule', 'update', '--init', '--depth', '1', 'components/mbedtls/mbedtls')
 verify_sources(args.core_version)
+
+# esp_h264's software encoder is published only through the component registry, so it is pinned by
+# version and archive hash instead of a commit: esp-adf-libs still carries 0.1.1 from 2023, whose
+# prebuilt-only encoder has no rate control and takes I420 rather than the camera's YUYV.
+h264 = ROOT / 'esp_h264'
+if not h264.exists():
+    version = selected['h264_version']
+    url = ('https://components-file.espressif.com/components/espressif/esp_h264/'
+           f'{version}/espressif__esp_h264-v{version}.zip')
+    archive = ROOT / 'esp_h264.zip'
+    urllib.request.urlretrieve(url, archive)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if digest != selected['h264_sha256']:
+        archive.unlink()
+        raise SystemExit(f'esp_h264 {version}: sha256 {digest} does not match the pinned value')
+    with zipfile.ZipFile(archive) as package:
+        package.extractall(h264)
+    archive.unlink()
+print('esp_h264', selected['h264_version'])

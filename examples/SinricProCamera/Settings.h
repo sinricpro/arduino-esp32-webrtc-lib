@@ -2,7 +2,7 @@
 #include "BoardProfiles.h"
 
 #ifndef CAMERA_BOARD
-#define CAMERA_BOARD BOARD_AI_THINKER
+#define CAMERA_BOARD BOARD_XIAO_S3_SENSE
 #endif
 
 #define WIFI_SSID  ""

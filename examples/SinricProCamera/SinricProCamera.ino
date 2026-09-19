@@ -1,11 +1,13 @@
 // SinricPro camera with live view in the SinricPro portal and app.
-// Video is JPEG over a WebRTC DataChannel; signaling runs through SinricPro (getWebRTCAnswer),
+// On ESP32-S3 the video is H.264 on a WebRTC video track; elsewhere, and for viewers that ask for
+// it, it is JPEG over a WebRTC DataChannel. Signaling runs through SinricPro (getWebRTCAnswer),
 // and STUN/TURN servers arrive with each offer, so remote viewing works outside your LAN.
 // Viewers can change resolution / frame rate and toggle flash, flip and mirror; quality drops
 // automatically on slow links. XIAO ESP32S3 Sense also streams its onboard microphone.
 //
 // Portal setup: device type Camera -> Camera Stream Configuration: Board "ESP32",
-// Streaming Protocol "WebRTC". Alexa and Google Home streaming is not supported yet.
+// Streaming Protocol "WebRTC". Tick "H.264 video track" on an ESP32-S3 to reach Amazon Alexa and
+// Google Home as well; without it the camera stays portal and app only.
 //
 // Requires: SinricPro library 5.1.0 or later, ESP32 core 3.3.10/3.3.11,
 // PSRAM enabled and an app partition of at least 3 MB.
@@ -28,6 +30,14 @@ I2SClass microphone;
 #define WEBRTC_MIC 0
 #endif
 
+// esp_h264 encodes in software and ships a prebuilt library for the S3 only. About 320x240 at
+// 10 fps is what it sustains; classic ESP32 keeps the JPEG DataChannel path.
+#if CONFIG_IDF_TARGET_ESP32S3
+#define WEBRTC_H264 1
+#else
+#define WEBRTC_H264 0
+#endif
+
 // Flash LED viewers can toggle (-1 = none). AI-Thinker ESP32-CAM has its flash on GPIO 4.
 #if CAMERA_BOARD == BOARD_AI_THINKER
 #define FLASH_LED_PIN 4
@@ -36,6 +46,8 @@ I2SClass microphone;
 #endif
 
 SinricProWebRTCSession session;
+// Kept so the session can re-initialise the camera in YUV422 for an H.264 video track.
+camera_config_t cameraConfig;
 
 constexpr CameraSetup::Board cameraBoard() {
 #if CAMERA_BOARD == BOARD_ESP_EYE
@@ -113,11 +125,14 @@ void setupMicrophone() {
 
 bool onSnapshot(const String &deviceId) {
     camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb)
+    if (!fb) {
+        Serial.printf("frame buffer failed\n");
         return false;
+    }
 
     SinricProCamera &camera = SinricPro[deviceId];
     int status = camera.sendSnapshot(fb->buf, fb->len);
+    Serial.printf("Sent status: %s\n", status == 200 ? "success" : "failed");
     esp_camera_fb_return(fb);
     return status == 200;
 }
@@ -133,6 +148,7 @@ void setupCamera() {
     camera_config_t config = CameraSetup::config(cameraBoard());
     // Buffers are sized for the init resolution, so init at the largest size viewers may pick.
     config.frame_size = FRAMESIZE_SVGA;
+    cameraConfig = config;
     esp_err_t err = WebRTCCamera::begin(config);
     if (err != ESP_OK) {
         Serial.printf("Camera init failed: 0x%x (%s). Check CAMERA_BOARD and PSRAM.\n", err, esp_err_to_name(err));
@@ -159,6 +175,10 @@ void setupWebRTC() {
     SinricProWebRTCSession::Config config;
     config.maxFrameSize = FRAMESIZE_SVGA;  // the size setupCamera() initialized the camera with
     config.flashPin = FLASH_LED_PIN;
+    config.cameraConfig = cameraConfig;
+#if WEBRTC_H264
+    config.h264 = true;
+#endif
 #if CONFIG_IDF_TARGET_ESP32
     // Once Wi-Fi and the SinricPro TLS socket are up, classic ESP32 has a single ~28 kB contiguous
     // internal block left. Caches large enough to consume it leave the Wi-Fi driver unable to
@@ -183,6 +203,7 @@ void setupSinricPro() {
     camera.onSnapshot(onSnapshot);
     camera.onWebRTCOffer(onWebRTCOffer);
     camera.enableWebRTCAudio(WEBRTC_MIC);  // viewers request an audio track only when this is set
+    camera.enableWebRTCVideo(WEBRTC_H264); // likewise for video; without it viewers get JPEG
     camera.onPowerState(onPowerState);
 
     SinricPro.onConnected([] { Serial.println("Connected to SinricPro"); });

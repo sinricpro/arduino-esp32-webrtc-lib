@@ -165,6 +165,35 @@ opt-in and does not scan the network or upload firmware.
 | XIAO ESP32S3 Sense microphone audible in portal and app | Not yet verified (mic path compiles) |
 | Firmware before SDK 5.1.0 shows the update-firmware message | Not yet verified |
 
+## H.264 video track (ESP32-S3) — 2026-09-16
+
+The ESP32-S3 archive now carries Espressif's esp_h264 1.4.1 software encoder with its prebuilt
+`libopenh264.a`. `WebRTCH264Streamer` encodes the camera's YUV422 frames and sends them on a WebRTC
+video track when the viewer's offer asks for one; a viewer that offers no video track, and every
+classic ESP32, keeps the JPEG DataChannel path unchanged.
+
+| Check | Result |
+| --- | --- |
+| esp_h264 pinned by version and archive hash, from the component registry | 1.4.1, sha256 `c42a7365…05ad4e67` |
+| ESP32-S3 archive rebuilt with the encoder | PASS: 19,682,010 bytes, from about 10.2 MB |
+| Classic ESP32 archive rebuilt, encoder excluded by target | PASS: 10,573,796 bytes |
+| SinricProCamera compiles for XIAO ESP32S3 Sense | PASS: 1,919,482 bytes (57% of huge_app), 78,560 bytes static RAM |
+| Flash cost of the encoder | About 272 KB, against the 1,640,754-byte JPEG-only build above |
+| Live H.264 session on hardware | Not yet verified |
+| Alexa (Echo Show) and Google Home, with the portal's "H.264 video track" setting | Not yet verified |
+
+esp-adf-libs was not usable as the source: it still ships esp_h264 0.1.1 from 2023, whose
+prebuilt-only encoder takes I420 rather than the camera's YUYV and offers no rate or keyframe
+control. Pinning the registry package by hash also leaves the shared `adf_commit` — and therefore
+libSRTP — exactly where it was.
+
+Two build defects surfaced during integration. Object files were named from the source stem alone,
+so esp_h264's C and ESP32-S3 assembly `h264_color_convert` both produced
+`h264_h264_color_convert.o`; one overwrote the other and the assembly routine `yuyv2iyuv_esp32s3`
+never reached the archive. Names now include the parent directory. Separately,
+`esp_h264_alloc.h` carries no `extern "C"` guard, unlike the other esp_h264 headers, so its
+declarations took C++ linkage in the streamer until that include was wrapped.
+
 ## Classic ESP32 bring-up findings — 2026-09-13
 
 Portal live view works on an AI-Thinker ESP32-CAM, but only after two constraints were found. Both
