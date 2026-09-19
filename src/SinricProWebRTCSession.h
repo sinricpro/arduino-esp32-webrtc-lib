@@ -140,6 +140,9 @@ private:
     bool closeRequested_ = false;
     bool audioActive_ = false;
     bool videoActive_ = false;
+    // The portal and the app carry their controls on a DataChannel; Alexa and Google Home offer
+    // media only. Its absence is what marks a smart-display viewer.
+    bool dataChannelOffered_ = false;
     bool capabilitiesPending_ = false;
     bool statePending_ = false;
     uint16_t channelId_ = 0;

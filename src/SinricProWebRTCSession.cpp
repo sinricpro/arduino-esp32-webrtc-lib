@@ -54,7 +54,11 @@ bool SinricProWebRTCSession::begin(const Config &config) {
     if (!commands_ || !answerReady_ || !answerLock_ || !offerLock_)
         return false;
 
-    return xTaskCreate(taskEntry, "webrtc", config_.taskStackSize, this, config_.taskPriority, &task_) == pdPASS;
+    // Pinned to core 0, beside WiFi and TLS, so core 1 belongs to the H.264 encoder alone. Left
+    // unpinned it lands on core 1 too, and two busy tasks of equal priority there keep the idle
+    // task off the core entirely, which trips the task watchdog and slows the encoder.
+    return xTaskCreatePinnedToCore(taskEntry, "webrtc", config_.taskStackSize, this,
+                                   config_.taskPriority, &task_, 0) == pdPASS;
 }
 
 bool SinricProWebRTCSession::handleOffer(const String &offerSdp, const std::vector<WebRTCIceServer> &iceServers,
@@ -169,7 +173,12 @@ void SinricProWebRTCSession::run() {
 
             if (channelOpen_)
                 streamToViewer();
-            else if (answerPublished_ && now - sessionStarted_ > config_.channelOpenTimeoutMs)
+            // Only a viewer that asked for a DataChannel is expected to open one. Alexa and
+            // Google Home never do, and dropping their session here cut the stream off mid-play.
+            // A session with neither a channel nor a video track has nothing to send, so that
+            // one still times out.
+            else if (answerPublished_ && (dataChannelOffered_ || !videoActive_) &&
+                     now - sessionStarted_ > config_.channelOpenTimeoutMs)
                 closeRequested_ = true;
 
             if (closeRequested_)
@@ -313,6 +322,13 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
         cfg.audio_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY;
     }
 
+    dataChannelOffered_ = strstr(cmd.offer, "webrtc-datachannel") != nullptr;
+    // Alexa and Google Home accept nothing below 480p, and have no DataChannel to ask for a
+    // different size with, so the larger mode is chosen for them up front.
+    if (!dataChannelOffered_ && config_.h264Width < 640) {
+        config_.h264Width = 640;
+        config_.h264Height = 480;
+    }
     videoActive_ = config_.h264 && offerWantsH264(cmd.offer) && selectCameraFormat(true);
     if (videoActive_) {
         cfg.video_info = {ESP_PEER_VIDEO_CODEC_H264, config_.h264Width, config_.h264Height, config_.h264Fps};
@@ -320,7 +336,10 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     }
 
     peerDefaults_ = {};
-    peerDefaults_.agent_recv_timeout = 10;
+    // Milliseconds the ICE agent waits for a reply. A LAN round trip is a couple of ms, but a
+    // smart display answers from a distant region: at 10 ms the DTLS ClientHello timed out long
+    // before the reply arrived and the handshake retried forever. Espressif's examples use 500.
+    peerDefaults_.agent_recv_timeout = 500;
     peerDefaults_.data_ch_cfg.send_cache_size = config_.dataChannelSendCache;
     peerDefaults_.data_ch_cfg.recv_cache_size = config_.dataChannelRecvCache;
     // RTP carries only the optional PCMU track, so a data-channel-only session would otherwise

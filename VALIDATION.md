@@ -179,8 +179,34 @@ classic ESP32, keeps the JPEG DataChannel path unchanged.
 | Classic ESP32 archive rebuilt, encoder excluded by target | PASS: 10,573,796 bytes |
 | SinricProCamera compiles for XIAO ESP32S3 Sense | PASS: 1,919,482 bytes (57% of huge_app), 78,560 bytes static RAM |
 | Flash cost of the encoder | About 272 KB, against the 1,640,754-byte JPEG-only build above |
-| Live H.264 session on hardware | Not yet verified |
-| Alexa (Echo Show) and Google Home, with the portal's "H.264 video track" setting | Not yet verified |
+| Live H.264 session on hardware, **this library** | Not yet verified |
+| Alexa and Google Home, **this library** | Not yet verified |
+
+### The same design, proven on the ESP-IDF SDK
+
+The streamer, the session changes and the capability negotiation were written twice: here, and in
+the SinricPro ESP-IDF component, which shares the design but not the code. The ESP-IDF build was
+taken to hardware on a XIAO ESP32S3 Sense and is where the measurements come from. It is evidence
+that the approach works, not that this library does.
+
+| Measured there | Result |
+| --- | --- |
+| Portal live view, H.264 | 320x240 and 640x480, switched mid-session without dropping the track |
+| Amazon Alexa | Connected and streamed at 640x480 |
+| Google Home (Chromecast with Google TV) | 90 s continuous at 640x480, 0 frames dropped |
+| Frame rate | About 300 ms per frame at 320x240, 800-1300 ms at 640x480 |
+
+Four faults surfaced only against a real service. All of them apply to this library too, so the
+same fixes are carried here — ported and compiled, but not themselves exercised on hardware:
+
+- An offer asking for a video track reaches about 21 KB, over the 15 KB the Arduino websocket
+  library accepts. The viewers now offer H.264 alone, which is what brings it back under.
+- A session whose offer carries no DataChannel must not be dropped by the data-channel timeout;
+  smart displays never open one.
+- Those viewers cannot use the resolution control either, and refuse anything below 480p, so the
+  session has to start at 640x480 by itself.
+- `agent_recv_timeout` has to allow for an internet round trip. At 10 ms the DTLS handshake
+  expired before a distant peer could answer and retried forever, while a LAN viewer was fine.
 
 esp-adf-libs was not usable as the source: it still ships esp_h264 0.1.1 from 2023, whose
 prebuilt-only encoder takes I420 rather than the camera's YUYV and offers no rate or keyframe
