@@ -1,8 +1,9 @@
 {
   "name": "SinricProWebRTC",
-  "version": "0.2.0",
-  "description": "WebRTC peer connections and camera doorbell examples for ESP32 and ESP32-S3. ESP32-S3 also streams H.264 on a video track. Install archives matching your Arduino core version.",
+  "version": "0.2.1",
+  "description": "WebRTC peer connections and camera doorbell examples for ESP32 and ESP32-S3. ESP32-S3 also streams H.264 on a video track. Bundles precompiled archives for Arduino ESP32 core 3.3.11.",
   "keywords": ["webrtc", "camera", "doorbell", "esp32"],
+  "homepage": "https://github.com/sinricpro/arduino-esp32-webrtc-lib",
   "repository": {
     "type": "git",
     "url": "https://github.com/sinricpro/arduino-esp32-webrtc-lib.git"
@@ -11,6 +12,13 @@
   "license": "MIT",
   "frameworks": "arduino",
   "platforms": "espressif32",
+  "export": {
+    "include": [
+      "library.properties", "library.json", "README.md", "BUILDING.md", "LICENSE",
+      "THIRD_PARTY.md", "VALIDATION.md", "LICENSES", "src", "examples", "tools", "tests"
+    ],
+    "exclude": ["**/.pio", "**/__pycache__"]
+  },
   "build": {
     "extraScript": "tools/platformio_build.py"
   }
