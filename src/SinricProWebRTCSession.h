@@ -8,12 +8,24 @@
 #include <freertos/semphr.h>
 #include "SinricProWebRTC.h"
 #include "WebRTCCameraControls.h"
+#include "WebRTCH264Streamer.h"
 #include "WebRTCJpegStreamer.h"
 
 struct WebRTCIceServer {
     String url;  // "stun:host:port", "turn:host:port?transport=udp", "turns:host:443?transport=tcp"
     String username;
     String credential;
+};
+
+// One H.264 size the encoder is built for, with the frame rate and bitrate that suit it. The table
+// lives in the .cpp; Config::h264Width picks a row from it.
+struct WebRTCH264Mode {
+    const char *name;
+    uint16_t width;
+    uint16_t height;
+    framesize_t frameSize;
+    uint32_t bitrate;
+    uint8_t fps;
 };
 
 // Answers viewer offers that arrive over a cloud signaling channel (SinricPro getWebRTCAnswer)
@@ -38,6 +50,19 @@ public:
         framesize_t maxFrameSize = FRAMESIZE_INVALID;
         int flashPin = -1;                      // flash LED GPIO (AI-Thinker ESP32-CAM: 4)
         bool audio = false;                     // send PCMU from setAudioSource() when the viewer offers audio
+
+        // Send H.264 on a WebRTC video track when the viewer offers one (ESP32-S3 only, where
+        // esp_h264 encodes in software). A viewer that offers no video track still gets JPEG over
+        // the DataChannel, so older app and portal versions keep working.
+        bool h264 = false;
+        // Preferred H.264 size. It selects the smallest supported mode at least this wide, and that
+        // mode supplies the frame rate and bitrate the encoder can hold at it, so neither is set
+        // here. A viewer with no DataChannel is a smart display and always gets 640x480.
+        uint16_t h264Width = 320;
+        uint16_t h264Height = 240;
+        // The board's camera wiring, as passed to esp_camera_init(). Required when h264 is set:
+        // the session re-initialises the camera in YUV422 for a video track and back to JPEG after.
+        camera_config_t cameraConfig = {};
     };
 
     // Fills `size` bytes of 8 kHz PCMU (160 = 20 ms) and returns true when a frame is ready.
@@ -93,11 +118,15 @@ private:
     void publishAnswer(bool ok, const String &error = String());
     void pollAudio();
     void streamToViewer();
+    bool selectCameraFormat(bool yuv);
+    void startH264();
+    void stopH264();
     String buildAnswer() const;
 
     Config config_;
     SinricProWebRTC rtc_;
     WebRTCJpegStreamer streamer_;
+    WebRTCH264Streamer h264_;
     WebRTCCameraControls controls_;
     AudioSource audioSource_;
     esp_peer_default_cfg_t peerDefaults_ = {};
@@ -122,6 +151,14 @@ private:
     bool answerPublished_ = true;
     bool closeRequested_ = false;
     bool audioActive_ = false;
+    bool videoActive_ = false;
+    // Chosen per session from Config::h264Width and whether the viewer offered a DataChannel.
+    // Held here rather than written back into config_, which outlives the session: a smart display
+    // would otherwise leave every later viewer stuck at its 640x480.
+    const WebRTCH264Mode *h264Mode_ = nullptr;
+    // The portal and the app carry their controls on a DataChannel; Alexa and Google Home offer
+    // media only. Its absence is what marks a smart-display viewer.
+    bool dataChannelOffered_ = false;
     bool capabilitiesPending_ = false;
     bool statePending_ = false;
     uint16_t channelId_ = 0;

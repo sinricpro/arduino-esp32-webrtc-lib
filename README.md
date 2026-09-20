@@ -1,6 +1,6 @@
 # WebRTC for Arduino ESP32
 
-WebRTC for Arduino ESP32 and ESP32-S3, powered by Espressif's `esp_peer` engine. Includes a camera doorbell example with a browser viewer, microphone streaming on XIAO ESP32S3 Sense, and ring/call controls.
+WebRTC for Arduino ESP32 and ESP32-S3, powered by Espressif's `esp_peer` engine. Includes a camera doorbell example with a browser viewer, microphone streaming on XIAO ESP32S3 Sense, and ring/call controls. ESP32-S3 can also send H.264 on a native WebRTC video track.
 
 The IDF dependencies are bundled as precompiled static libraries (`.a`). No ESP-IDF or WSL setup is needed to use the library in Arduino IDE.
 
@@ -92,7 +92,7 @@ For migration, replace `WebRTCCamera::begin(board)` with `WebRTCCamera::begin(co
 The **SinricProCamera** example streams to the SinricPro portal and app from anywhere. Signaling runs over the device's SinricPro connection: the viewer's offer arrives as a `getWebRTCAnswer` request together with STUN/TURN servers, and `SinricProWebRTCSession` answers it.
 
 1. Install the SinricPro library version that provides `CameraController::onWebRTCOffer`.
-2. In the portal, create a **Camera** device and set Camera Stream Configuration to Board **ESP32**, Streaming Protocol **WebRTC**.
+2. In the portal, create a **Camera** device and set Camera Stream Configuration to Board **ESP32**, Streaming Protocol **WebRTC**. On an ESP32-S3, also tick **H.264 video track** so the camera is offered to Amazon Alexa and Google Home.
 3. Open **File > Examples > SinricProWebRTC > SinricProCamera**, fill in `Settings.h`, and upload.
 4. Tap the camera in the app, or **Preview** in the portal.
 
@@ -107,9 +107,9 @@ bool onWebRTCOffer(const String &deviceId, const String &offerSdp,
 }
 ```
 
-`handleOffer()` returns an answer that already contains every local candidate, because SinricPro signaling is a single offer/answer exchange without trickle ICE. One viewer is served at a time; a new offer replaces the current viewer. Amazon Alexa and Google Home streaming need a native H.264 track and are not supported yet.
+`handleOffer()` returns an answer that already contains every local candidate, because SinricPro signaling is a single offer/answer exchange without trickle ICE. One viewer is served at a time; a new offer replaces the current viewer. Amazon Alexa and Google Home need a native H.264 track, which an ESP32-S3 provides when `Config::h264` is set and the portal's **H.264 video track** setting is ticked; classic ESP32 streams JPEG and stays portal and app only.
 
-Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.0+) answers `{webrtc, webrtcAudio}` on its own, and older firmware is asked to update.
+Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.0+) answers `{webrtc, webrtcAudio, webrtcVideo}` on its own, and older firmware is asked to update. Viewers ask for a video track only when `webrtcVideo` is reported, which is what keeps older app and portal versions on the JPEG path.
 
 **Viewer controls.** Text messages on the same DataChannel carry JSON controls (binary messages stay JPEG fragments). When the channel opens the camera sends `{"type":"capabilities",...}` and `{"type":"state",...}`; viewers send `{"type":"set","resolution":"SVGA"}`, `fps`, `flash`, `flip`, `mirror` or `autoQuality`. Resolutions are offered up to `Config::maxFrameSize`, which must not exceed the size the camera was initialized with. Set `Config::flashPin` to expose a flash LED (AI-Thinker: GPIO 4).
 
@@ -117,17 +117,20 @@ Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.
 
 **Microphone.** Set `Config::audio = true`, provide `setAudioSource()` (20 ms of 8 kHz PCMU per call) and call `camera.enableWebRTCAudio()` so viewers request an audio track. The examples enable the XIAO ESP32S3 Sense PDM microphone.
 
+**Video track (ESP32-S3).** Set `Config::h264 = true`, give `Config::cameraConfig` the same `camera_config_t` you passed to `WebRTCCamera::begin()`, and call `camera.enableWebRTCVideo()` so viewers offer a video track. The session then re-initialises the camera in YUV422, encodes with esp_h264 on its own task pinned to the second core, and sends H.264 over RTP while the DataChannel carries only the controls. `Config::h264Width` selects a mode: 320 x 240 at about 3 fps, or 640 x 480 at about 2 fps. A viewer with no DataChannel is a smart display and always gets 640 x 480, since Alexa and Google Home refuse anything below 480p. It restores JPEG mode when the viewer leaves. The encoder adds roughly 272 KB of flash and has no prebuilt library for classic ESP32, which keeps the DataChannel path.
+
 ## Capabilities and limits
 
 | Feature | Included behavior |
 | --- | --- |
 | Camera | 640 x 480 JPEG images by default, up to 5 fps, over an encrypted WebRTC data channel |
+| Camera (ESP32-S3) | H.264 on a native video track, 320 x 240 at about 3 fps or 640 x 480 at about 2 fps, encoded in software by esp_h264 |
 | Browser viewer | Served directly by the board; reassembles and displays JPEG frames |
 | Microphone | XIAO Sense onboard PDM microphone, sent as an 8 kHz PCMU/G.711 audio track |
 | Controls | Ring, accept, end call, and an open-door command placeholder |
 | Signaling | Doorbell: local HTTP with a viewer token. SinricProCamera: SinricPro cloud, with STUN/TURN |
 
-JPEG camera streaming requires the included viewer; it is not a native WebRTC video track. H.264 encoding, speaker playback, two-way audio, and acoustic echo cancellation are not included. Microphones on other board profiles are disabled by default.
+JPEG camera streaming requires the included viewer; it is not a native WebRTC video track. H.264 encoding is available on ESP32-S3 only, where it is capped near 320 x 240 by the software encoder. Speaker playback, two-way audio, and acoustic echo cancellation are not included. Microphones on other board profiles are disabled by default.
 
 The example uses direct connections on a trusted LAN. HTTP signaling and the viewer token are unencrypted, although WebRTC media and data transport are encrypted. Its browser candidate adapter assumes a direct LAN connection and does not support reverse proxies or NAT. Remote access requires authenticated HTTPS/WebSocket signaling and suitable ICE/STUN/TURN configuration.
 

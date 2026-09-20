@@ -37,6 +37,7 @@ def main():
     mbed = sources_dir(args.core_version) / 'esp-idf/components/mbedtls/mbedtls'
     srtp = sources_dir(args.core_version) / 'esp-adf-libs/esp_libsrtp/libsrtp'
     peer = sources_dir(args.core_version) / 'esp-webrtc-solution/components/esp_peer'
+    h264 = sources_dir(args.core_version) / 'esp_h264'
     if f"esp-idf: v{selected['idf_version']} {selected['idf_commit'][:10]}" not in (sdk / 'versions.txt').read_text():
         raise SystemExit('Unexpected Arduino IDF SDK revision; refusing an ABI-mismatched build.')
     config = (mbed / 'include/mbedtls/mbedtls_config.h').read_text()
@@ -106,6 +107,12 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
               '-I' + str(peer / 'include'), '-I' + str(peer / 'src'),
               '-I' + str(sdk / 'qio_qspi/include'),
               '-iprefix', str(sdk / 'include') + '/', '@' + str(sdk / 'flags/includes')]
+    # esp_h264 encodes H.264 in software, and only the S3 has a prebuilt library for it.
+    if args.target == 'esp32s3':
+        flags += ['-DHAVE_ESP32S3',
+                  '-I' + str(h264 / 'interface/include'), '-I' + str(h264 / 'sw/include'),
+                  '-I' + str(h264 / 'port/include'), '-I' + str(h264 / 'port/inc'),
+                  '-I' + str(h264 / 'sw/libs/openh264_inc'), '-I' + str(h264 / 'sw/src')]
     crypto_sources = [p for p in (mbed / 'library').glob('*.c') if p.name != 'timing.c'] + [out / 'esp_port.c']
     srtp_sources = ['srtp/srtp.c', 'crypto/cipher/cipher.c', 'crypto/cipher/cipher_test_cases.c',
                     'crypto/cipher/null_cipher.c', 'crypto/cipher/aes.c', 'crypto/cipher/aes_icm.c',
@@ -115,16 +122,28 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
                     'crypto/math/datatypes.c', 'crypto/replay/rdb.c', 'crypto/replay/rdbx.c']
     peer_sources = [peer / 'src' / f for f in ['esp_peer.c', 'media_lib_weak.c', 'dtls_srtp.c', 'peer_utils.c',
                     'transport/udp.c', 'transport/tcp.c', 'transport/tls.c', 'transport/peer_tls_esp.c']]
+    # Encoder only: a camera never decodes, and the decoder is what would drag in libtinyh264.
+    # esp_h264_alloc_less_than_5_3.c is for ESP-IDF below 5.3; the pinned SDK is newer.
+    h264_sources = [] if args.target != 'esp32s3' else [h264 / f for f in [
+        'interface/src/esp_h264_enc_single.c', 'interface/src/esp_h264_enc_dual.c',
+        'interface/src/esp_h264_enc_param.c', 'interface/src/esp_h264_enc_param_hw.c',
+        'interface/src/esp_h264_version.c', 'port/src/esp_h264_alloc.c', 'port/src/esp_h264_cache.c',
+        'sw/src/esp_h264_enc_single_sw.c', 'sw/src/esp_h264_enc_sw_param.c',
+        'sw/src/h264_color_convert.c', 'sw/src/asm/esp32s3/h264_color_convert.S']]
     def compile_one(item):
         category, src = item
-        obj = out / (category + '_' + src.stem + '.o')
+        # The parent directory is part of the name because esp_h264 ships h264_color_convert as
+        # both a C file and an esp32s3 assembly version. With names built from the stem alone the
+        # second overwrote the first, and the archive lost yuyv2iyuv_esp32s3.
+        obj = out / (category + '_' + src.parent.name + '_' + src.stem + '.o')
         result = subprocess.run([str(gcc), *flags, '-c', str(src), '-o', str(obj)], capture_output=True, text=True)
         if result.returncode:
             raise RuntimeError(str(src) + '\n' + result.stdout + result.stderr)
         if obj.read_bytes()[:6] != b'\x7fELF\x01\x01':
             raise RuntimeError(f'{obj}: expected a 32-bit little-endian ESP object')
         return obj
-    items = [('crypto', p) for p in crypto_sources] + [('srtp', srtp / p) for p in srtp_sources] + [('peer', p) for p in peer_sources]
+    items = ([('crypto', p) for p in crypto_sources] + [('srtp', srtp / p) for p in srtp_sources] +
+             [('peer', p) for p in peer_sources] + [('h264', p) for p in h264_sources])
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         objects = list(pool.map(compile_one, items))
     # Namespace every private crypto definition, including references in the peer
@@ -148,6 +167,8 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
     archive = dest / 'libsinric_webrtc.a'
     # MRI ADDLIB preserves all upstream archive members.
     script = 'CREATE ' + archive.as_posix() + '\nADDLIB ' + prebuilt.as_posix() + '\n'
+    if args.target == 'esp32s3':
+        script += 'ADDLIB ' + (h264 / 'sw/libs/esp32s3/libopenh264.a').as_posix() + '\n'
     script += ''.join('ADDMOD ' + p.as_posix() + '\n' for p in objects)
     script += 'SAVE\nEND\n'
     run([ar, '-M'], input=script, text=True)

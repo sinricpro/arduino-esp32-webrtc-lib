@@ -16,6 +16,37 @@ constexpr size_t kMaxControlBytes = 512;
 constexpr int32_t kWeakSignalDbm = -75;
 constexpr size_t kAudioFrameBytes = 160;  // 20 ms of 8 kHz PCMU
 constexpr uint32_t kAudioFrameMs = 20;
+
+// A viewer that can render a video track offers H.264. Older viewers offer no video at all and
+// keep the JPEG path, which is what makes this backward compatible.
+bool offerWantsH264(const char *offer) {
+    return strstr(offer, "m=video") != nullptr && strstr(offer, "H264") != nullptr;
+}
+
+// Each size carries the rate the ESP32-S3 software encoder actually sustains at it. QVGA measured
+// 204 frames in 73 s on a XIAO ESP32S3 Sense, about 2.8 fps with no frame dropped; encoding itself
+// takes around 100 ms, so the ceiling is how fast the session loop drains encoded frames, not the
+// encoder. The figure is advertised in the SDP and a receiver paces its jitter buffer against it,
+// so an optimistic one costs more than it gains. Alexa and Google Home refuse anything below 480p,
+// which makes VGA the smallest size that reaches them.
+const WebRTCH264Mode kH264Modes[] = {
+    {"QVGA", 320, 240, FRAMESIZE_QVGA, 400000, 3},
+    {"VGA", 640, 480, FRAMESIZE_VGA, 800000, 2},
+};
+
+const WebRTCH264Mode *h264ModeForWidth(uint16_t width) {
+    for (const WebRTCH264Mode &mode : kH264Modes)
+        if (mode.width >= width)
+            return &mode;
+    return &kH264Modes[sizeof(kH264Modes) / sizeof(kH264Modes[0]) - 1];
+}
+
+const WebRTCH264Mode *h264ModeByName(const char *name) {
+    for (const WebRTCH264Mode &mode : kH264Modes)
+        if (strcmp(name, mode.name) == 0)
+            return &mode;
+    return nullptr;
+}
 }  // namespace
 
 bool SinricProWebRTCSession::begin(const Config &config) {
@@ -33,7 +64,11 @@ bool SinricProWebRTCSession::begin(const Config &config) {
     if (!commands_ || !answerReady_ || !answerLock_ || !offerLock_)
         return false;
 
-    return xTaskCreate(taskEntry, "webrtc", config_.taskStackSize, this, config_.taskPriority, &task_) == pdPASS;
+    // Pinned to core 0, beside WiFi and TLS, so core 1 belongs to the H.264 encoder alone. Left
+    // unpinned it lands on core 1 too, and two busy tasks of equal priority there keep the idle
+    // task off the core entirely, which trips the task watchdog and slows the encoder.
+    return xTaskCreatePinnedToCore(taskEntry, "webrtc", config_.taskStackSize, this,
+                                   config_.taskPriority, &task_, 0) == pdPASS;
 }
 
 bool SinricProWebRTCSession::handleOffer(const String &offerSdp, const std::vector<WebRTCIceServer> &iceServers,
@@ -131,6 +166,10 @@ void SinricProWebRTCSession::run() {
         if (rtc_.handle()) {
             rtc_.loop();
 
+            // Independent of the DataChannel: video flows as soon as the peer is connected.
+            if (h264_.running())
+                h264_.send(rtc_);
+
             const uint32_t now = millis();
             if (!answerPublished_) {
                 if (localSdp_.length() && now - lastSignal_ >= kCandidateSettleMs) {
@@ -144,7 +183,12 @@ void SinricProWebRTCSession::run() {
 
             if (channelOpen_)
                 streamToViewer();
-            else if (answerPublished_ && now - sessionStarted_ > config_.channelOpenTimeoutMs)
+            // Only a viewer that asked for a DataChannel is expected to open one. Alexa and
+            // Google Home never do, and dropping their session here cut the stream off mid-play.
+            // A session with neither a channel nor a video track has nothing to send, so that
+            // one still times out.
+            else if (answerPublished_ && (dataChannelOffered_ || !videoActive_) &&
+                     now - sessionStarted_ > config_.channelOpenTimeoutMs)
                 closeRequested_ = true;
 
             if (closeRequested_)
@@ -161,6 +205,14 @@ void SinricProWebRTCSession::streamToViewer() {
         capabilitiesPending_ = false;
     if (!capabilitiesPending_ && statePending_ && rtc_.sendText(channelId_, controls_.stateJson().c_str()) == 0)
         statePending_ = false;
+
+    if (videoActive_) {
+        // The track carries the video; the DataChannel is left to the control protocol.
+        h264_.setFps(static_cast<uint8_t>(1000 / std::max<uint32_t>(controls_.frameIntervalMs(), 1)));
+        if (controls_.takeStateChanged())
+            statePending_ = true;
+        return;
+    }
 
     streamer_.setFrameInterval(controls_.frameIntervalMs());
     WebRTCJpegStreamer::Result result = streamer_.loop(rtc_, channelId_);
@@ -187,6 +239,53 @@ void SinricProWebRTCSession::pollAudio() {
     if (audioActive_ && channelOpen_)
         rtc_.sendAudio(pcmu, sizeof(pcmu), audioPts_);
     audioPts_ += kAudioFrameMs;
+}
+
+// The encoder reads YUV422 and the JPEG path needs JPEG, so the camera is re-initialised for the
+// session and restored afterwards. Re-initialising resets the sensor, hence the reapply.
+bool SinricProWebRTCSession::selectCameraFormat(bool yuv) {
+    camera_config_t cfg = config_.cameraConfig;
+    if (!cfg.xclk_freq_hz) {
+        log_e("Config::cameraConfig is required for the H.264 video track");
+        return false;
+    }
+
+    if (yuv) {
+        cfg.pixel_format = PIXFORMAT_YUV422;
+        cfg.frame_size = h264Mode_->frameSize;
+        cfg.fb_count = 2;
+        cfg.grab_mode = CAMERA_GRAB_LATEST;
+    }
+
+    const esp_err_t err = esp_camera_reconfigure(&cfg);
+    if (err != ESP_OK) {
+        log_e("Camera reconfigure failed: 0x%x", err);
+        return false;
+    }
+    controls_.reapply(!yuv);
+    controls_.setH264(yuv, yuv ? h264Mode_->name : nullptr, yuv ? h264Mode_->fps : 0);
+    return true;
+}
+
+void SinricProWebRTCSession::startH264() {
+    WebRTCH264Streamer::Config cfg;
+    cfg.width = h264Mode_->width;
+    cfg.height = h264Mode_->height;
+    cfg.fps = h264Mode_->fps;
+    cfg.bitrate = h264Mode_->bitrate;
+    cfg.taskPriority = config_.taskPriority;
+    if (!h264_.begin(cfg)) {
+        log_e("H.264 encoder failed to start");
+        closeRequested_ = true;
+    }
+}
+
+void SinricProWebRTCSession::stopH264() {
+    h264_.end();
+    if (videoActive_) {
+        videoActive_ = false;
+        selectCameraFormat(false);
+    }
 }
 
 void SinricProWebRTCSession::startPeer(Command &cmd) {
@@ -232,15 +331,43 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
         cfg.audio_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY;
     }
 
+    dataChannelOffered_ = strstr(cmd.offer, "webrtc-datachannel") != nullptr;
+    h264Mode_ = h264ModeForWidth(config_.h264Width);
+    // Alexa and Google Home accept nothing below 480p, and have no DataChannel to ask for a
+    // different size with, so the larger mode is chosen for them up front.
+    if (!dataChannelOffered_) {
+        const WebRTCH264Mode *mode = h264ModeByName("VGA");
+        if (mode != nullptr)
+            h264Mode_ = mode;
+    }
+    videoActive_ = config_.h264 && offerWantsH264(cmd.offer) && selectCameraFormat(true);
+    if (videoActive_) {
+        cfg.video_info = {ESP_PEER_VIDEO_CODEC_H264, h264Mode_->width, h264Mode_->height, h264Mode_->fps};
+        cfg.video_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY;
+    }
+
     peerDefaults_ = {};
-    peerDefaults_.agent_recv_timeout = 10;
-    peerDefaults_.data_ch_cfg.send_cache_size = config_.dataChannelSendCache;
-    peerDefaults_.data_ch_cfg.recv_cache_size = config_.dataChannelRecvCache;
+    // Milliseconds the ICE agent waits for a reply. A LAN round trip is a couple of ms, but a
+    // smart display answers from a distant region: at 10 ms the DTLS ClientHello timed out long
+    // before the reply arrived and the handshake retried forever. Espressif's examples use 500.
+    peerDefaults_.agent_recv_timeout = 500;
+    // The configured caches are sized for JPEG fragments. An H.264 session sends its video over RTP
+    // and leaves the channel carrying only JSON controls, which kMaxControlBytes caps at 512, so
+    // holding 48 kB of internal RAM for it starves the Wi-Fi driver: measured on a XIAO ESP32-S3,
+    // free internal heap bottomed out at 468 bytes and sendto() began failing with ENOMEM.
+    peerDefaults_.data_ch_cfg.send_cache_size = videoActive_ ? 4 * 1024 : config_.dataChannelSendCache;
+    peerDefaults_.data_ch_cfg.recv_cache_size = videoActive_ ? 2 * 1024 : config_.dataChannelRecvCache;
     // RTP carries only the optional PCMU track, so a data-channel-only session would otherwise
     // strand internal RAM that the Wi-Fi driver needs for its dynamic TX buffers. Zero is not an
     // option here: esp_peer reads it as "use the 400 kB default".
-    peerDefaults_.rtp_cfg.send_pool_size = audioActive_ ? 48 * 1024 : 4 * 1024;
-    peerDefaults_.rtp_cfg.send_queue_num = audioActive_ ? 64 : 8;
+    // An encoded frame becomes some 40 RTP packets, which is what the video pool is sized for.
+    if (videoActive_) {
+        peerDefaults_.rtp_cfg.send_pool_size = 64 * 1024;
+        peerDefaults_.rtp_cfg.send_queue_num = 64;
+    } else {
+        peerDefaults_.rtp_cfg.send_pool_size = audioActive_ ? 48 * 1024 : 4 * 1024;
+        peerDefaults_.rtp_cfg.send_queue_num = audioActive_ ? 64 : 8;
+    }
     cfg.extra_cfg = &peerDefaults_;
     cfg.extra_size = sizeof(peerDefaults_);
 
@@ -260,6 +387,8 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
 
 void SinricProWebRTCSession::closePeer() {
     streamer_.reset();
+    // Before the peer closes: the encoder task holds camera buffers while it runs.
+    stopH264();
     controls_.viewerLeft();
     channelOpen_ = false;
     closeRequested_ = false;
@@ -338,6 +467,11 @@ int SinricProWebRTCSession::onState(esp_peer_state_t state, void *ctx) {
     log_d("Peer state: %d", state);
     if (state == ESP_PEER_STATE_DISCONNECTED || state == ESP_PEER_STATE_CONNECT_FAILED)
         self->closeRequested_ = true;
+    // Encoding starts only once there is somewhere to send frames.
+    else if (state == ESP_PEER_STATE_CONNECTED && self->videoActive_ && !self->h264_.running())
+        self->startH264();
+    else if (state == ESP_PEER_STATE_VIDEO_PLI_RECEIVED)
+        self->h264_.requestKeyframe();
     return 0;
 }
 

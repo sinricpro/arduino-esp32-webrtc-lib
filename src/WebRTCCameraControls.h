@@ -19,6 +19,10 @@ public:
     // initialized with (its JPEG buffers are sized for that); FRAMESIZE_INVALID = current size.
     void begin(framesize_t maxFrameSize, int flashPin, uint32_t frameIntervalMs, bool autoQuality);
 
+    // Switches the reported video path between the H.264 track and DataChannel JPEG.
+    // `resolution` is the encoder's fixed resolution, e.g. "QVGA".
+    void setH264(bool active, const char *resolution, int fps);
+
     // Applies a "set" message; returns true if anything changed.
     bool apply(const String &message);
 
@@ -27,6 +31,9 @@ public:
 
     // Restores full quality and turns the flash off when the viewer disconnects.
     void viewerLeft();
+
+    // Re-applies the remembered sensor settings after the camera has been re-initialised.
+    void reapply(bool includeFrameSize);
 
     uint32_t frameIntervalMs() const;
     String capabilitiesJson() const;
@@ -46,6 +53,10 @@ private:
 
     framesize_t frameSize_ = FRAMESIZE_VGA;
     framesize_t maxFrameSize_ = FRAMESIZE_VGA;
+    // An H.264 session runs at the one resolution the encoder was created for, so the resolution
+    // control is reported as a single choice and changes are rejected.
+    bool h264Active_ = false;
+    const char *h264Resolution_ = nullptr;
     int flashPin_ = -1;
     int fps_ = 5;
     int baseQuality_ = 12;

@@ -106,6 +106,17 @@ void WebRTCCameraControls::begin(framesize_t maxFrameSize, int flashPin, uint32_
     autoQuality_ = autoQuality;
 }
 
+void WebRTCCameraControls::setH264(bool active, const char *resolution, int fps) {
+    h264Active_ = active;
+    h264Resolution_ = resolution;
+    if (active) {
+        // The JPEG quality ladder has nothing to act on while the encoder owns the bitrate.
+        setLevel(0);
+        fps_ = constrain(fps, kMinFps, kMaxFps);
+    }
+    stateChanged_ = true;
+}
+
 bool WebRTCCameraControls::apply(const String &message) {
     String type;
     if (!jsonString(message, "type", type) || type != "set")
@@ -164,20 +175,41 @@ uint32_t WebRTCCameraControls::frameIntervalMs() const {
     return (1000 / fps_) * kLevels[level_].intervalPercent / 100;
 }
 
+void WebRTCCameraControls::reapply(bool includeFrameSize) {
+    sensor_t *sensor = esp_camera_sensor_get();
+    if (!sensor)
+        return;
+    if (includeFrameSize)
+        sensor->set_framesize(sensor, frameSize_);
+    sensor->set_quality(sensor, std::min(kMaxJpegQuality, baseQuality_ + kLevels[level_].qualityOffset));
+    sensor->set_vflip(sensor, flip_);
+    sensor->set_hmirror(sensor, mirror_);
+}
+
 String WebRTCCameraControls::capabilitiesJson() const {
     String json = "{\"type\":\"capabilities\",\"resolutions\":[";
-    bool first = true;
-    for (const ResolutionName &resolution : kResolutions) {
-        if (resolution.size > maxFrameSize_)
-            continue;
-        if (!first)
-            json += ',';
-        json += '"';
-        json += resolution.name;
-        json += '"';
-        first = false;
+    if (h264Active_) {
+        if (h264Resolution_) {
+            json += '"';
+            json += h264Resolution_;
+            json += '"';
+        }
+    } else {
+        bool first = true;
+        for (const ResolutionName &resolution : kResolutions) {
+            if (resolution.size > maxFrameSize_)
+                continue;
+            if (!first)
+                json += ',';
+            json += '"';
+            json += resolution.name;
+            json += '"';
+            first = false;
+        }
     }
-    json += "],\"minFps\":";
+    json += "],\"videoCodec\":\"";
+    json += h264Active_ ? "h264" : "jpeg";
+    json += "\",\"minFps\":";
     json += kMinFps;
     json += ",\"maxFps\":";
     json += kMaxFps;
@@ -188,8 +220,10 @@ String WebRTCCameraControls::capabilitiesJson() const {
 }
 
 String WebRTCCameraControls::stateJson() const {
-    String json = "{\"type\":\"state\",\"resolution\":\"";
-    json += resolutionName(frameSize_);
+    String json = "{\"type\":\"state\",\"videoCodec\":\"";
+    json += h264Active_ ? "h264" : "jpeg";
+    json += "\",\"resolution\":\"";
+    json += (h264Active_ && h264Resolution_) ? h264Resolution_ : resolutionName(frameSize_);
     json += "\",\"fps\":";
     json += fps_;
     json += ",\"flash\":";
@@ -215,6 +249,8 @@ bool WebRTCCameraControls::takeStateChanged() {
 }
 
 bool WebRTCCameraControls::setResolution(const String &name) {
+    if (h264Active_)
+        return false;
     sensor_t *sensor = esp_camera_sensor_get();
     for (const ResolutionName &resolution : kResolutions) {
         if (name != resolution.name || resolution.size > maxFrameSize_)

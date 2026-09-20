@@ -165,6 +165,85 @@ opt-in and does not scan the network or upload firmware.
 | XIAO ESP32S3 Sense microphone audible in portal and app | Not yet verified (mic path compiles) |
 | Firmware before SDK 5.1.0 shows the update-firmware message | Not yet verified |
 
+## H.264 video track (ESP32-S3) — 2026-09-16
+
+The ESP32-S3 archive now carries Espressif's esp_h264 1.4.1 software encoder with its prebuilt
+`libopenh264.a`. `WebRTCH264Streamer` encodes the camera's YUV422 frames and sends them on a WebRTC
+video track when the viewer's offer asks for one; a viewer that offers no video track, and every
+classic ESP32, keeps the JPEG DataChannel path unchanged.
+
+| Check | Result |
+| --- | --- |
+| esp_h264 pinned by version and archive hash, from the component registry | 1.4.1, sha256 `c42a7365…05ad4e67` |
+| ESP32-S3 archive rebuilt with the encoder | PASS: 19,682,010 bytes, from about 10.2 MB |
+| Classic ESP32 archive rebuilt, encoder excluded by target | PASS: 10,573,796 bytes |
+| SinricProCamera compiles for XIAO ESP32S3 Sense | PASS: 1,919,482 bytes (57% of huge_app), 78,560 bytes static RAM |
+| Flash cost of the encoder | About 272 KB, against the 1,640,754-byte JPEG-only build above |
+| Live H.264 session on hardware, **this library** | PASS, see below |
+| Alexa and Google Home, **this library** | Not yet verified |
+
+### Live H.264 on hardware — 2026-09-20
+
+XIAO ESP32S3 Sense, SinricProCamera example, portal Preview over the internet through SinricPro
+signalling. H.264 is the default path, so it is what a viewer gets without touching any control.
+
+| Measured | Result |
+| --- | --- |
+| Sustained rate at 320x240 | 204 frames in 73 s, about 2.8 fps |
+| Frames dropped | 0 |
+| Encode time per frame | 70-165 ms, mean about 98 ms |
+| Internal heap while streaming | 21,948 bytes free, largest block 7,668, flat for the whole run |
+| PSRAM while streaming | 6,540,880 free, about 1.65 MB for the encoder and YUV422 buffers |
+| ICE, DTLS, data channel | Completed; full ladder to `DATA_CHANNEL_OPENED` |
+
+The encoder is idle roughly 70% of the time (14 frames x ~98 ms of work per 5 s), so the ceiling is
+how fast the session loop drains encoded frames, not encode speed. `H264_MODES` declares 3 fps at
+320x240 to match what is actually sustained; a receiver sizes its jitter buffer from the advertised
+rate, so over-declaring costs more than it gains.
+
+The largest free internal block settles at about 7.7 KB once the encoder is running, against 31.7 KB
+on the JPEG path. It is stable there indefinitely, but it is the figure to watch when adding
+anything that allocates internal DRAM during a session.
+
+### The same design, proven on the ESP-IDF SDK
+
+The streamer, the session changes and the capability negotiation were written twice: here, and in
+the SinricPro ESP-IDF component, which shares the design but not the code. The ESP-IDF build was
+taken to hardware on a XIAO ESP32S3 Sense and is where the measurements come from. It is evidence
+that the approach works, not that this library does.
+
+| Measured there | Result |
+| --- | --- |
+| Portal live view, H.264 | 320x240 and 640x480, switched mid-session without dropping the track |
+| Amazon Alexa | Connected and streamed at 640x480 |
+| Google Home (Chromecast with Google TV) | 90 s continuous at 640x480, 0 frames dropped |
+| Frame rate | About 300 ms per frame at 320x240, 800-1300 ms at 640x480 |
+
+Four faults surfaced only against a real service. All of them apply to this library too, so the
+same fixes are carried here. The first three are covered by the hardware run above; the smart
+display behaviour is not, since only Alexa and Google Home exercise it:
+
+- An offer asking for a video track reaches about 21 KB, over the 15 KB the Arduino websocket
+  library accepts. The viewers now offer H.264 alone, which is what brings it back under.
+- A session whose offer carries no DataChannel must not be dropped by the data-channel timeout;
+  smart displays never open one.
+- Those viewers cannot use the resolution control either, and refuse anything below 480p, so the
+  session has to start at 640x480 by itself.
+- `agent_recv_timeout` has to allow for an internet round trip. At 10 ms the DTLS handshake
+  expired before a distant peer could answer and retried forever, while a LAN viewer was fine.
+
+esp-adf-libs was not usable as the source: it still ships esp_h264 0.1.1 from 2023, whose
+prebuilt-only encoder takes I420 rather than the camera's YUYV and offers no rate or keyframe
+control. Pinning the registry package by hash also leaves the shared `adf_commit` — and therefore
+libSRTP — exactly where it was.
+
+Two build defects surfaced during integration. Object files were named from the source stem alone,
+so esp_h264's C and ESP32-S3 assembly `h264_color_convert` both produced
+`h264_h264_color_convert.o`; one overwrote the other and the assembly routine `yuyv2iyuv_esp32s3`
+never reached the archive. Names now include the parent directory. Separately,
+`esp_h264_alloc.h` carries no `extern "C"` guard, unlike the other esp_h264 headers, so its
+declarations took C++ linkage in the streamer until that include was wrapped.
+
 ## Classic ESP32 bring-up findings — 2026-09-13
 
 Portal live view works on an AI-Thinker ESP32-CAM, but only after two constraints were found. Both
