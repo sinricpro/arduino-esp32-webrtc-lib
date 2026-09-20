@@ -68,7 +68,15 @@ The staged library contains both processor archives, an exact core guard in `Sin
 
 Keep Wi-Fi placeholders in the distributed example. Configure credentials only in your local sketch copy. For hardware validation, install the generated variant, upload HardwareCheck and Doorbell on the intended board, then test camera, audio where available, connection, disconnect/reconnect, and sustained streaming.
 
-The repository tracks no archives, so every tool that links or packages them needs a staged build; `--core-version` selects which one.
+The repository tracks only the 3.3.11 archives, under `src/esp32/` and `src/esp32s3/`, because Library Manager and the PlatformIO Registry install the tree as-is. Every tool that links or packages another core needs a staged build; `--core-version` selects which one.
+
+After a change that alters the built API, refresh the tracked pair from the 3.3.11 staged build and commit it:
+
+```powershell
+python tools/refresh_baseline.py
+```
+
+`tests/baseline.py` runs in CI on the 3.3.11 job and fails the commit if the tracked archives lack a symbol the fresh build defines, or if `build-info.json` no longer describes them. It compares exported symbols rather than bytes, since `ar` output is not reproducible across runs.
 
 ## PlatformIO
 

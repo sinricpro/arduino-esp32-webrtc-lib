@@ -71,6 +71,9 @@ jobs:
         run: python tools/build_archives.py --target esp32s3 --core-version $env:CORE_VERSION
       - name: Check archive symbols and byte order
         run: python tests/archives.py --core-version $env:CORE_VERSION
+      - name: Check the committed baseline archives against this build
+        if: matrix.core == '3.3.11'
+        run: python tests/baseline.py
       - name: Stage version-specific library
         run: python tools/prepare_library.py --core-version $env:CORE_VERSION
       - name: Test build configuration safeguards

@@ -14,11 +14,16 @@ The IDF dependencies are bundled as precompiled static libraries (`.a`). No ESP-
 
 ## Installation
 
+### Library Manager — Arduino ESP32 3.3.11
+
+In Arduino IDE, open **Sketch > Include Library > Manage Libraries**, search for **SinricProWebRTC**, and install it. Library Manager serves the repository tree, which carries the 3.3.11 archives. On any other core the version guard stops the build instead of linking mismatched binaries; install the ZIP for that core instead.
+
+### ZIP — any supported core
+
 1. Download `SinricProWebRTC-<version>-arduino-<core>.zip` for your Arduino core from the [latest release](https://github.com/sinricpro/arduino-esp32-webrtc-lib/releases/latest).
 2. In Arduino IDE, select **Sketch > Include Library > Add .ZIP Library** and choose that ZIP. Install one variant at a time.
-3. Open **File > Examples > SinricProWebRTC > Doorbell**.
 
-The repository holds sources only — the precompiled archives are release assets. Cloning it into `libraries/` does not give a working library; use a release ZIP, or build the archives yourself following [BUILDING.md](BUILDING.md).
+Either way, open **File > Examples > SinricProWebRTC > Doorbell** once the library is installed.
 
 ## Board setup
 
@@ -175,7 +180,23 @@ The [HardwareCheck example](examples/HardwareCheck/HardwareCheck.ino) provides c
 
 ## PlatformIO
 
-Use the provided [PlatformIO project](examples/PlatformIO/platformio.ini). It links this library locally and reuses `Doorbell.ino`, `Settings.h`, and `CameraConfig.h`. Run it from a staged build: the project links the library root, and the checkout carries no archives.
+Depend on the registry package, which carries the 3.3.11 archives:
+
+```ini
+lib_deps = sinricpro/SinricProWebRTC@^0.2.1
+```
+
+For a core other than 3.3.11, point `lib_deps` at that core's release asset instead:
+
+```ini
+lib_deps = https://github.com/sinricpro/arduino-esp32-webrtc-lib/releases/download/<version>/SinricProWebRTC-<version>-arduino-3.3.10.zip
+```
+
+Use the pinned platform URL from the example below and enable the appropriate PSRAM and application partition settings. `library.json` automatically links the archive for your MCU, and the version guard rejects a mismatched Arduino framework. PlatformIO integration currently targets 3.3.11; the Arduino CLI workflow builds both core versions.
+
+### The bundled example project
+
+Use the provided [PlatformIO project](examples/PlatformIO/platformio.ini). It links this library locally and reuses `Doorbell.ino`, `Settings.h`, and `CameraConfig.h`. Run it from a staged build so the archives match the core under test:
 
 ```powershell
 python -m platformio run --project-dir build/arduino-3.3.11/SinricProWebRTC/examples/PlatformIO -e esp32cam
@@ -184,14 +205,6 @@ python -m platformio run --project-dir build/arduino-3.3.11/SinricProWebRTC/exam
 ```
 
 The project pins **pioarduino 55.03.311**, which supplies Arduino ESP32 **3.3.11**. Use the 3.3.11 library variant with it. The project's build flags select the board profile, overriding the default in `Settings.h`. Append `-t upload` to flash; use `pio device monitor --baud 115200` for logs.
-
-For your own project, depend on a release asset rather than on this repository, which ships no archives:
-
-```ini
-lib_deps = https://github.com/sinricpro/arduino-esp32-webrtc-lib/releases/download/<version>/SinricProWebRTC-<version>-arduino-3.3.11.zip
-```
-
-Use the pinned platform URL from the example and enable the appropriate PSRAM and application partition settings. `library.json` automatically links the archive for your MCU, and the version guard rejects a mismatched Arduino framework. PlatformIO integration currently targets 3.3.11; the Arduino CLI workflow builds both core versions.
 
 ## Build from source
 
@@ -211,7 +224,7 @@ python tools/package.py --core-version $coreVersion
 
 Run one command at a time and stop on errors. The scripts use Arduino's installed SDK and compiler; no separate IDF or WSL setup is needed. `ARDUINO_DIRECTORIES_DATA` can select an isolated Arduino package directory, and `ARDUINO_CLI` can specify the CLI executable.
 
-Each core gets separate sources, build output, archive manifests, and a ZIP with an exact version guard. Builds write archives into `build/` and package them into `dist/`; the repository itself tracks none. The available adapter, transport, libSRTP, and private Mbed TLS sources are compiled; Espressif's supplied peer-engine binary is included. See [BUILDING.md](BUILDING.md) for setup and validation details.
+Each core gets separate sources, build output, archive manifests, and a ZIP with an exact version guard. Builds write archives into `build/` and package them into `dist/`. The repository tracks the 3.3.11 archives under `src/esp32/` and `src/esp32s3/` because Library Manager and the PlatformIO Registry install the tree as-is; refresh them with `tools/refresh_baseline.py` whenever a change alters the built API, or CI rejects the commit. The available adapter, transport, libSRTP, and private Mbed TLS sources are compiled; Espressif's supplied peer-engine binary is included. See [BUILDING.md](BUILDING.md) for setup and validation details.
 
 ## Supporting multiple Arduino core versions
 
@@ -223,7 +236,7 @@ Arduino selects precompiled archives by processor, not core version. Install the
 
 [build.yml](.github/workflows/build.yml) runs on PRs, default-branch pushes (including merges), published releases, and manual dispatch. Separate Windows jobs rebuild each core's ESP32 and ESP32-S3 archives, check crypto isolation, test the viewer, and compile all ten Doorbell profiles plus HardwareCheck. The 3.3.11 job also builds the PlatformIO ESP32 and ESP32-S3 examples.
 
-Publishing a release rebuilds every core version from the tagged commit and attaches each `SinricProWebRTC-<version>-arduino-<core>.zip` to it, so the binaries are produced by CI rather than committed. A tag that disagrees with `library.properties` fails before any archive is built. Artifacts from ordinary runs expire and need a GitHub login, so use a release for installation. CI does not flash boards; hardware validation is recorded separately.
+Publishing a release rebuilds every core version from the tagged commit and attaches each `SinricProWebRTC-<version>-arduino-<core>.zip` to it. A tag that disagrees with `library.properties` fails before any archive is built, and the 3.3.11 job rejects a commit whose tracked archives no longer export what the build defines. Artifacts from ordinary runs expire and need a GitHub login, so use a release for installation. CI does not flash boards; hardware validation is recorded separately.
 
 ## Does it use a server?
 

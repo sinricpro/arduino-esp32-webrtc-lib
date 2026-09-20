@@ -1,0 +1,28 @@
+{
+  "target": "esp32s3",
+  "arduino_core": "3.3.11",
+  "idf": "5.5.5",
+  "profile": {
+    "sdk_version": "3.3.11",
+    "toolchain": "2601",
+    "idf_version": "5.5.5",
+    "idf_commit": "b774170ff46c393eeb5e495ea37936038d3f4f4f",
+    "mbedtls_commit": "9d669eadb1955d348986b9280156710aaaadf79f",
+    "peer_commit": "c8650846b512e6e1375e5f78c1c41619b8d645eb",
+    "adf_commit": "da256e5f462a8e010667d35314a5ba5cdc4a8d9a",
+    "h264_version": "1.4.1",
+    "h264_sha256": "c42a736537eb67e465d996a6c8dc521ae2e93fdaa2f64b65a72efba305ad4e67"
+  },
+  "sha256": "b94eea3bda500343a540e47977589bcfe379c6f6dbf15eb3ee5152b84bccd853",
+  "private_symbols": 1333,
+  "sources": {
+    "build-support\\sources-3.3.11\\esp-webrtc-solution": "c8650846b512e6e1375e5f78c1c41619b8d645eb",
+    "build-support\\sources-3.3.11\\esp-idf\\components\\mbedtls\\mbedtls": "9d669eadb1955d348986b9280156710aaaadf79f",
+    "build-support\\sources-3.3.11\\esp-adf-libs": "da256e5f462a8e010667d35314a5ba5cdc4a8d9a"
+  },
+  "patches": {
+    "esp-webrtc-solution": [
+      "components/esp_peer/src/transport/udp.c"
+    ]
+  }
+}

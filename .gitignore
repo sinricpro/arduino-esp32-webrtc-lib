@@ -2,9 +2,5 @@
 /build-support/
 /upstream/
 /dist/
-# Archives are release assets, not repository content: each is ~10 MB of incompressible data that
-# git would retain for every release. Builds write them to build/ and package them into dist/.
-/src/esp32/
-/src/esp32s3/
 __pycache__/
 .pio/
