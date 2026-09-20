@@ -117,14 +117,14 @@ Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.
 
 **Microphone.** Set `Config::audio = true`, provide `setAudioSource()` (20 ms of 8 kHz PCMU per call) and call `camera.enableWebRTCAudio()` so viewers request an audio track. The examples enable the XIAO ESP32S3 Sense PDM microphone.
 
-**Video track (ESP32-S3).** Set `Config::h264 = true`, give `Config::cameraConfig` the same `camera_config_t` you passed to `WebRTCCamera::begin()`, and call `camera.enableWebRTCVideo()` so viewers offer a video track. The session then re-initialises the camera in YUV422, encodes with esp_h264 at 320 x 240 and about 10 fps on its own task pinned to the second core, and sends H.264 over RTP while the DataChannel carries only the controls. It restores JPEG mode when the viewer leaves. The encoder adds roughly 272 KB of flash and has no prebuilt library for classic ESP32, which keeps the DataChannel path.
+**Video track (ESP32-S3).** Set `Config::h264 = true`, give `Config::cameraConfig` the same `camera_config_t` you passed to `WebRTCCamera::begin()`, and call `camera.enableWebRTCVideo()` so viewers offer a video track. The session then re-initialises the camera in YUV422, encodes with esp_h264 on its own task pinned to the second core, and sends H.264 over RTP while the DataChannel carries only the controls. `Config::h264Width` selects a mode: 320 x 240 at about 3 fps, or 640 x 480 at about 2 fps. A viewer with no DataChannel is a smart display and always gets 640 x 480, since Alexa and Google Home refuse anything below 480p. It restores JPEG mode when the viewer leaves. The encoder adds roughly 272 KB of flash and has no prebuilt library for classic ESP32, which keeps the DataChannel path.
 
 ## Capabilities and limits
 
 | Feature | Included behavior |
 | --- | --- |
 | Camera | 640 x 480 JPEG images by default, up to 5 fps, over an encrypted WebRTC data channel |
-| Camera (ESP32-S3) | H.264 on a native video track, 320 x 240 at about 10 fps, encoded in software by esp_h264 |
+| Camera (ESP32-S3) | H.264 on a native video track, 320 x 240 at about 3 fps or 640 x 480 at about 2 fps, encoded in software by esp_h264 |
 | Browser viewer | Served directly by the board; reassembles and displays JPEG frames |
 | Microphone | XIAO Sense onboard PDM microphone, sent as an 8 kHz PCMU/G.711 audio track |
 | Controls | Ring, accept, end call, and an open-door command placeholder |

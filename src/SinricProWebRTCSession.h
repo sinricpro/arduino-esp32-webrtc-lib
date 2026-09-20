@@ -17,6 +17,17 @@ struct WebRTCIceServer {
     String credential;
 };
 
+// One H.264 size the encoder is built for, with the frame rate and bitrate that suit it. The table
+// lives in the .cpp; Config::h264Width picks a row from it.
+struct WebRTCH264Mode {
+    const char *name;
+    uint16_t width;
+    uint16_t height;
+    framesize_t frameSize;
+    uint32_t bitrate;
+    uint8_t fps;
+};
+
 // Answers viewer offers that arrive over a cloud signaling channel (SinricPro getWebRTCAnswer)
 // and streams camera JPEG frames over the viewer's DataChannel, with viewer controls
 // (WebRTCCameraControls) and an optional PCMU microphone track.
@@ -44,10 +55,11 @@ public:
         // esp_h264 encodes in software). A viewer that offers no video track still gets JPEG over
         // the DataChannel, so older app and portal versions keep working.
         bool h264 = false;
+        // Preferred H.264 size. It selects the smallest supported mode at least this wide, and that
+        // mode supplies the frame rate and bitrate the encoder can hold at it, so neither is set
+        // here. A viewer with no DataChannel is a smart display and always gets 640x480.
         uint16_t h264Width = 320;
         uint16_t h264Height = 240;
-        uint8_t h264Fps = 10;
-        uint32_t h264Bitrate = 400000;
         // The board's camera wiring, as passed to esp_camera_init(). Required when h264 is set:
         // the session re-initialises the camera in YUV422 for a video track and back to JPEG after.
         camera_config_t cameraConfig = {};
@@ -140,6 +152,10 @@ private:
     bool closeRequested_ = false;
     bool audioActive_ = false;
     bool videoActive_ = false;
+    // Chosen per session from Config::h264Width and whether the viewer offered a DataChannel.
+    // Held here rather than written back into config_, which outlives the session: a smart display
+    // would otherwise leave every later viewer stuck at its 640x480.
+    const WebRTCH264Mode *h264Mode_ = nullptr;
     // The portal and the app carry their controls on a DataChannel; Alexa and Google Home offer
     // media only. Its absence is what marks a smart-display viewer.
     bool dataChannelOffered_ = false;

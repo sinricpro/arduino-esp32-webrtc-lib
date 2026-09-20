@@ -30,8 +30,8 @@ I2SClass microphone;
 #define WEBRTC_MIC 0
 #endif
 
-// esp_h264 encodes in software and ships a prebuilt library for the S3 only. About 320x240 at
-// 10 fps is what it sustains; classic ESP32 keeps the JPEG DataChannel path.
+// esp_h264 encodes in software and ships a prebuilt library for the S3 only. It sustains about
+// 3 fps at 320x240 and 2 fps at 640x480; classic ESP32 keeps the JPEG DataChannel path.
 #if CONFIG_IDF_TARGET_ESP32S3
 #define WEBRTC_H264 1
 #else

@@ -179,8 +179,31 @@ classic ESP32, keeps the JPEG DataChannel path unchanged.
 | Classic ESP32 archive rebuilt, encoder excluded by target | PASS: 10,573,796 bytes |
 | SinricProCamera compiles for XIAO ESP32S3 Sense | PASS: 1,919,482 bytes (57% of huge_app), 78,560 bytes static RAM |
 | Flash cost of the encoder | About 272 KB, against the 1,640,754-byte JPEG-only build above |
-| Live H.264 session on hardware, **this library** | Not yet verified |
+| Live H.264 session on hardware, **this library** | PASS, see below |
 | Alexa and Google Home, **this library** | Not yet verified |
+
+### Live H.264 on hardware — 2026-09-20
+
+XIAO ESP32S3 Sense, SinricProCamera example, portal Preview over the internet through SinricPro
+signalling. H.264 is the default path, so it is what a viewer gets without touching any control.
+
+| Measured | Result |
+| --- | --- |
+| Sustained rate at 320x240 | 204 frames in 73 s, about 2.8 fps |
+| Frames dropped | 0 |
+| Encode time per frame | 70-165 ms, mean about 98 ms |
+| Internal heap while streaming | 21,948 bytes free, largest block 7,668, flat for the whole run |
+| PSRAM while streaming | 6,540,880 free, about 1.65 MB for the encoder and YUV422 buffers |
+| ICE, DTLS, data channel | Completed; full ladder to `DATA_CHANNEL_OPENED` |
+
+The encoder is idle roughly 70% of the time (14 frames x ~98 ms of work per 5 s), so the ceiling is
+how fast the session loop drains encoded frames, not encode speed. `H264_MODES` declares 3 fps at
+320x240 to match what is actually sustained; a receiver sizes its jitter buffer from the advertised
+rate, so over-declaring costs more than it gains.
+
+The largest free internal block settles at about 7.7 KB once the encoder is running, against 31.7 KB
+on the JPEG path. It is stable there indefinitely, but it is the figure to watch when adding
+anything that allocates internal DRAM during a session.
 
 ### The same design, proven on the ESP-IDF SDK
 
@@ -197,7 +220,8 @@ that the approach works, not that this library does.
 | Frame rate | About 300 ms per frame at 320x240, 800-1300 ms at 640x480 |
 
 Four faults surfaced only against a real service. All of them apply to this library too, so the
-same fixes are carried here — ported and compiled, but not themselves exercised on hardware:
+same fixes are carried here. The first three are covered by the hardware run above; the smart
+display behaviour is not, since only Alexa and Google Home exercise it:
 
 - An offer asking for a video track reaches about 21 KB, over the 15 KB the Arduino websocket
   library accepts. The viewers now offer H.264 alone, which is what brings it back under.

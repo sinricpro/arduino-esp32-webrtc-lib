@@ -23,19 +23,29 @@ bool offerWantsH264(const char *offer) {
     return strstr(offer, "m=video") != nullptr && strstr(offer, "H264") != nullptr;
 }
 
-framesize_t h264FrameSize(uint16_t width, const char **name) {
-    if (width <= 160) {
-        *name = "QQVGA";
-        return FRAMESIZE_QQVGA;
-    }
-    if (width <= 320) {
-        *name = "QVGA";
-        return FRAMESIZE_QVGA;
-    }
-    // Alexa and Google Home both refuse anything below 480p, so VGA is the smallest size that can
-    // reach them; the software encoder manages it only at a low frame rate.
-    *name = "VGA";
-    return FRAMESIZE_VGA;
+// Each size carries the rate the ESP32-S3 software encoder actually sustains at it. QVGA measured
+// 204 frames in 73 s on a XIAO ESP32S3 Sense, about 2.8 fps with no frame dropped; encoding itself
+// takes around 100 ms, so the ceiling is how fast the session loop drains encoded frames, not the
+// encoder. The figure is advertised in the SDP and a receiver paces its jitter buffer against it,
+// so an optimistic one costs more than it gains. Alexa and Google Home refuse anything below 480p,
+// which makes VGA the smallest size that reaches them.
+const WebRTCH264Mode kH264Modes[] = {
+    {"QVGA", 320, 240, FRAMESIZE_QVGA, 400000, 3},
+    {"VGA", 640, 480, FRAMESIZE_VGA, 800000, 2},
+};
+
+const WebRTCH264Mode *h264ModeForWidth(uint16_t width) {
+    for (const WebRTCH264Mode &mode : kH264Modes)
+        if (mode.width >= width)
+            return &mode;
+    return &kH264Modes[sizeof(kH264Modes) / sizeof(kH264Modes[0]) - 1];
+}
+
+const WebRTCH264Mode *h264ModeByName(const char *name) {
+    for (const WebRTCH264Mode &mode : kH264Modes)
+        if (strcmp(name, mode.name) == 0)
+            return &mode;
+    return nullptr;
 }
 }  // namespace
 
@@ -240,10 +250,9 @@ bool SinricProWebRTCSession::selectCameraFormat(bool yuv) {
         return false;
     }
 
-    const char *name = nullptr;
     if (yuv) {
         cfg.pixel_format = PIXFORMAT_YUV422;
-        cfg.frame_size = h264FrameSize(config_.h264Width, &name);
+        cfg.frame_size = h264Mode_->frameSize;
         cfg.fb_count = 2;
         cfg.grab_mode = CAMERA_GRAB_LATEST;
     }
@@ -254,16 +263,16 @@ bool SinricProWebRTCSession::selectCameraFormat(bool yuv) {
         return false;
     }
     controls_.reapply(!yuv);
-    controls_.setH264(yuv, name, config_.h264Fps);
+    controls_.setH264(yuv, yuv ? h264Mode_->name : nullptr, yuv ? h264Mode_->fps : 0);
     return true;
 }
 
 void SinricProWebRTCSession::startH264() {
     WebRTCH264Streamer::Config cfg;
-    cfg.width = config_.h264Width;
-    cfg.height = config_.h264Height;
-    cfg.fps = config_.h264Fps;
-    cfg.bitrate = config_.h264Bitrate;
+    cfg.width = h264Mode_->width;
+    cfg.height = h264Mode_->height;
+    cfg.fps = h264Mode_->fps;
+    cfg.bitrate = h264Mode_->bitrate;
     cfg.taskPriority = config_.taskPriority;
     if (!h264_.begin(cfg)) {
         log_e("H.264 encoder failed to start");
@@ -323,15 +332,17 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     }
 
     dataChannelOffered_ = strstr(cmd.offer, "webrtc-datachannel") != nullptr;
+    h264Mode_ = h264ModeForWidth(config_.h264Width);
     // Alexa and Google Home accept nothing below 480p, and have no DataChannel to ask for a
     // different size with, so the larger mode is chosen for them up front.
-    if (!dataChannelOffered_ && config_.h264Width < 640) {
-        config_.h264Width = 640;
-        config_.h264Height = 480;
+    if (!dataChannelOffered_) {
+        const WebRTCH264Mode *mode = h264ModeByName("VGA");
+        if (mode != nullptr)
+            h264Mode_ = mode;
     }
     videoActive_ = config_.h264 && offerWantsH264(cmd.offer) && selectCameraFormat(true);
     if (videoActive_) {
-        cfg.video_info = {ESP_PEER_VIDEO_CODEC_H264, config_.h264Width, config_.h264Height, config_.h264Fps};
+        cfg.video_info = {ESP_PEER_VIDEO_CODEC_H264, h264Mode_->width, h264Mode_->height, h264Mode_->fps};
         cfg.video_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY;
     }
 
@@ -340,8 +351,12 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     // smart display answers from a distant region: at 10 ms the DTLS ClientHello timed out long
     // before the reply arrived and the handshake retried forever. Espressif's examples use 500.
     peerDefaults_.agent_recv_timeout = 500;
-    peerDefaults_.data_ch_cfg.send_cache_size = config_.dataChannelSendCache;
-    peerDefaults_.data_ch_cfg.recv_cache_size = config_.dataChannelRecvCache;
+    // The configured caches are sized for JPEG fragments. An H.264 session sends its video over RTP
+    // and leaves the channel carrying only JSON controls, which kMaxControlBytes caps at 512, so
+    // holding 48 kB of internal RAM for it starves the Wi-Fi driver: measured on a XIAO ESP32-S3,
+    // free internal heap bottomed out at 468 bytes and sendto() began failing with ENOMEM.
+    peerDefaults_.data_ch_cfg.send_cache_size = videoActive_ ? 4 * 1024 : config_.dataChannelSendCache;
+    peerDefaults_.data_ch_cfg.recv_cache_size = videoActive_ ? 2 * 1024 : config_.dataChannelRecvCache;
     // RTP carries only the optional PCMU track, so a data-channel-only session would otherwise
     // strand internal RAM that the Wi-Fi driver needs for its dynamic TX buffers. Zero is not an
     // option here: esp_peer reads it as "use the 400 kB default".
