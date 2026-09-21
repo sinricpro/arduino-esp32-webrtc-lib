@@ -1,7 +1,6 @@
 #pragma once
 #include "BoardProfiles.h"
 
-// LILYGO T-Camera ESP32-WROVER-B / OV2640 on COM14 (camera only).
 #ifndef DOORBELL_BOARD
 #define DOORBELL_BOARD BOARD_LILYGO_CAMERA
 #endif
