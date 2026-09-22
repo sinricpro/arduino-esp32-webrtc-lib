@@ -16,8 +16,8 @@ public:
     static constexpr size_t kChunkSize = 1024;
     static constexpr uint32_t kStallMs = 1000;
     // esp_peer_main_loop() blocks for up to agent_recv_timeout, so the session loop runs only a few
-    // times a second. Each fragment goes straight to UDP; on classic ESP32 a 16-fragment burst ran
-    // the Wi-Fi TX buffers out (sendto ENOMEM) and wedged DTLS, while 4 produced no deferred sends.
+    // times a second. Each fragment goes straight to UDP, and a larger burst runs classic ESP32's
+    // Wi-Fi TX buffers out (sendto ENOMEM), which can wedge DTLS.
     static constexpr size_t kBurstFragments = 4;
 
     enum class Result { Idle, Sending, Completed, Abandoned };
