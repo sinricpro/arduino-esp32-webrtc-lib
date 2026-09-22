@@ -164,7 +164,18 @@ void SinricProWebRTCSession::run() {
         pollAudio();
 
         if (rtc_.handle()) {
+#ifdef SINRICPRO_WEBRTC_DIAG
+            const uint32_t loopStart = micros();
+#endif
             rtc_.loop();
+#ifdef SINRICPRO_WEBRTC_DIAG
+            const uint32_t loopUs = micros() - loopStart;
+            diag_.loopUs += loopUs;
+            diag_.loopMaxUs = std::max(diag_.loopMaxUs, loopUs);
+            ++diag_.iterations;
+            if (channelOpen_ || h264_.running())
+                reportDiag();
+#endif
 
             // Independent of the DataChannel: video flows as soon as the peer is connected.
             if (h264_.running())
@@ -199,6 +210,40 @@ void SinricProWebRTCSession::run() {
     }
 }
 
+#ifdef SINRICPRO_WEBRTC_DIAG
+void SinricProWebRTCSession::reportDiag() {
+    const uint32_t now = millis();
+    if (now - diag_.last < 2000)
+        return;
+
+    // The encoder's counters are cumulative and restart with each session.
+    const uint32_t encoded = h264_.encodedFrames();
+    const uint32_t h264Dropped = h264_.droppedFrames();
+    if (encoded < diag_.h264Encoded || h264Dropped < diag_.h264Dropped)
+        diag_.h264Encoded = diag_.h264Dropped = 0;
+    if (videoActive_) {
+        diag_.done = encoded - diag_.h264Encoded;
+        diag_.dropped = h264Dropped - diag_.h264Dropped;
+    }
+
+    const uint32_t frames = diag_.done + diag_.dropped;
+    sensor_t *sensor = esp_camera_sensor_get();
+    using ul = unsigned long;
+    Serial.printf("DIAG %lus: done %lu drop %lu | avg frame %lu B, avg send %lu ms, blocked %lu | "
+                  "interval %lu ms q%d | loop iters %lu, main_loop avg %lu us max %lu us | codec %s\n",
+                  ul(now / 1000), ul(diag_.done), ul(diag_.dropped), ul(frames ? diag_.bytes / frames : 0),
+                  ul(frames ? diag_.sendMs / frames : 0), ul(diag_.blocked), ul(controls_.frameIntervalMs()),
+                  sensor ? sensor->status.quality : -1, ul(diag_.iterations),
+                  ul(diag_.iterations ? diag_.loopUs / diag_.iterations : 0), ul(diag_.loopMaxUs),
+                  videoActive_ ? "h264" : "jpeg");
+
+    diag_ = Diag{};
+    diag_.last = now;
+    diag_.h264Encoded = encoded;
+    diag_.h264Dropped = h264Dropped;
+}
+#endif
+
 void SinricProWebRTCSession::streamToViewer() {
     // Control messages go first: they are tiny and the viewer needs them to render its controls.
     if (capabilitiesPending_ && rtc_.sendText(channelId_, controls_.capabilitiesJson().c_str()) == 0)
@@ -223,6 +268,15 @@ void SinricProWebRTCSession::streamToViewer() {
                   static_cast<unsigned>(streamer_.lastFrameDurationMs()),
                   static_cast<unsigned>(streamer_.lastBlockedSends()));
         controls_.onFrameResult(result == WebRTCJpegStreamer::Result::Completed, streamer_.lastFrameDurationMs());
+#ifdef SINRICPRO_WEBRTC_DIAG
+        if (result == WebRTCJpegStreamer::Result::Completed)
+            ++diag_.done;
+        else
+            ++diag_.dropped;
+        diag_.bytes += streamer_.lastSentBytes();
+        diag_.sendMs += streamer_.lastFrameDurationMs();
+        diag_.blocked += streamer_.lastBlockedSends();
+#endif
     }
 
     if (controls_.takeStateChanged())

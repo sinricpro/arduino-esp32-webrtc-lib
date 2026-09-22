@@ -146,6 +146,25 @@ private:
     std::vector<String> localCandidates_;
     uint32_t activeSequence_ = 0;
     uint32_t sessionStarted_ = 0;
+
+#ifdef SINRICPRO_WEBRTC_DIAG
+    // Counters behind the DIAG serial line that tools/hw_test.py parses. Build with
+    // -DSINRICPRO_WEBRTC_DIAG to enable; the line format is part of that tool's contract.
+    struct Diag {
+        uint32_t last = 0;
+        uint32_t done = 0;
+        uint32_t dropped = 0;
+        uint32_t bytes = 0;
+        uint32_t sendMs = 0;
+        uint32_t blocked = 0;
+        uint32_t iterations = 0;
+        uint32_t loopUs = 0;
+        uint32_t loopMaxUs = 0;
+        uint32_t h264Encoded = 0;
+        uint32_t h264Dropped = 0;
+    } diag_;
+    void reportDiag();
+#endif
     uint32_t lastSignal_ = 0;
     uint32_t audioPts_ = 0;
     bool answerPublished_ = true;

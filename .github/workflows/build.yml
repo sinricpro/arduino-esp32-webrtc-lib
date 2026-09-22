@@ -76,8 +76,8 @@ jobs:
         run: python tests/baseline.py
       - name: Stage version-specific library
         run: python tools/prepare_library.py --core-version $env:CORE_VERSION
-      - name: Test build configuration safeguards
-        run: python -m unittest discover -s tests -p test_build_config.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -p "test_*.py"
       - name: Test browser viewer
         run: node tests/viewer.test.cjs
       - name: Compile all Doorbell profiles and HardwareCheck

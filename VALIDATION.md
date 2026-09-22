@@ -244,6 +244,32 @@ never reached the archive. Names now include the parent directory. Separately,
 `esp_h264_alloc.h` carries no `extern "C"` guard, unlike the other esp_h264 headers, so its
 declarations took C++ linkage in the streamer until that include was wrapped.
 
+## Board matrix — 2026-09-22
+
+Verdicts from `tools/hw_test.py`, which passes a run only when the radio stayed healthy: no
+`sendto` deferrals beyond the one during ICE setup, no mbedtls WANT_WRITE, no dropped frames and a
+flat internal heap. Frame rate alone does not pass a run. Each row is a portal Preview on the same
+LAN, streaming QVGA and then switching to VGA, judged with `hw_test.py --log`.
+
+| Board | Build | Verdict | Result |
+| --- | --- | --- | --- |
+| LILYGO T-Camera | 0.2.1: one fragment per loop, 500 ms timeout | FAIL | 0.23 fps; 199 VGA frames dropped at the 1 s stall limit |
+| LILYGO T-Camera | Burst of 16 fragments | FAIL | 1.48 fps; 65 deferred sends, 7 WANT_WRITE |
+| LILYGO T-Camera | Burst of 4 fragments, QVGA only | FAIL | 1.61 fps; 2 WANT_WRITE, and it wedged at VGA in a later run |
+| LILYGO T-Camera | 100 ms timeout, XCLK 20 MHz | FAIL | 449 deferred sends, 38 WANT_WRITE; the channel wedged at the VGA switch |
+| LILYGO T-Camera | **0.3.0: 100 ms timeout, XCLK 10 MHz** | **PASS** | 1.21 fps over 243 s, QVGA and VGA, no drops, RSSI −66 to −60 dBm |
+| AI-Thinker ESP32-CAM | 0.3.0 | not measured | the test board sat at −80 to −89 dBm; one session failed on the link with 1,089 deferred sends |
+| XIAO ESP32S3 Sense | 0.3.0, H.264 and JPEG | not measured with `hw_test.py` | H.264 figures above predate the tool |
+
+To add a row, build with `-DSINRICPRO_WEBRTC_DIAG` and run the tool against the board:
+
+```
+python tools/hw_test.py --sketch examples/SinricProCamera --fqbn <fqbn> --port <port>     --define CAMERA_BOARD=<profile> --seconds 180
+```
+
+Open Preview once the board reports `Connected to SinricPro`, stay at QVGA for a minute, then
+switch to VGA. A run below −75 dBm tests the link rather than the code; the tool notes it.
+
 ## Classic ESP32 bring-up findings — 2026-09-13
 
 Portal live view works on an AI-Thinker ESP32-CAM, but only after two constraints were found. Both
