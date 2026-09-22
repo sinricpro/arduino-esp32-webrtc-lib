@@ -93,6 +93,9 @@ void WebRTCCameraControls::begin(framesize_t maxFrameSize, int flashPin, uint32_
         baseQuality_ = sensor->status.quality;
         flip_ = sensor->status.vflip;
         mirror_ = sensor->status.hmirror;
+        brightness_ = sensor->status.brightness;
+        contrast_ = sensor->status.contrast;
+        aeLevel_ = sensor->status.ae_level;
     }
     maxFrameSize_ = maxFrameSize == FRAMESIZE_INVALID ? frameSize_ : maxFrameSize;
 
@@ -138,6 +141,13 @@ bool WebRTCCameraControls::apply(const String &message) {
         changed |= setMirror(flag);
     if (jsonBool(message, "autoQuality", flag))
         changed |= setAutoQuality(flag);
+    sensor_t *sensor = esp_camera_sensor_get();
+    if (sensor && jsonInt(message, "brightness", number))
+        changed |= setImageLevel(brightness_, number, sensor->set_brightness);
+    if (sensor && jsonInt(message, "contrast", number))
+        changed |= setImageLevel(contrast_, number, sensor->set_contrast);
+    if (sensor && jsonInt(message, "aeLevel", number))
+        changed |= setImageLevel(aeLevel_, number, sensor->set_ae_level);
 
     // Report state even when a value was rejected so the viewer resyncs its controls.
     stateChanged_ = true;
@@ -184,6 +194,9 @@ void WebRTCCameraControls::reapply(bool includeFrameSize) {
     sensor->set_quality(sensor, std::min(kMaxJpegQuality, baseQuality_ + kLevels[level_].qualityOffset));
     sensor->set_vflip(sensor, flip_);
     sensor->set_hmirror(sensor, mirror_);
+    sensor->set_brightness(sensor, brightness_);
+    sensor->set_contrast(sensor, contrast_);
+    sensor->set_ae_level(sensor, aeLevel_);
 }
 
 String WebRTCCameraControls::capabilitiesJson() const {
@@ -215,7 +228,12 @@ String WebRTCCameraControls::capabilitiesJson() const {
     json += kMaxFps;
     json += ",\"flash\":";
     json += boolText(flashPin_ >= 0);
-    json += ",\"flip\":true,\"mirror\":true}";
+    json += ",\"flip\":true,\"mirror\":true,\"brightness\":true,\"contrast\":true,\"aeLevel\":true";
+    json += ",\"minImageLevel\":";
+    json += kMinImageLevel;
+    json += ",\"maxImageLevel\":";
+    json += kMaxImageLevel;
+    json += '}';
     return json;
 }
 
@@ -232,6 +250,12 @@ String WebRTCCameraControls::stateJson() const {
     json += boolText(flip_);
     json += ",\"mirror\":";
     json += boolText(mirror_);
+    json += ",\"brightness\":";
+    json += brightness_;
+    json += ",\"contrast\":";
+    json += contrast_;
+    json += ",\"aeLevel\":";
+    json += aeLevel_;
     json += ",\"autoQuality\":";
     json += boolText(autoQuality_);
     json += ",\"qualityLevel\":";
@@ -295,6 +319,15 @@ bool WebRTCCameraControls::setMirror(bool on) {
     if (on == mirror_ || !sensor || sensor->set_hmirror(sensor, on) != 0)
         return false;
     mirror_ = on;
+    return true;
+}
+
+bool WebRTCCameraControls::setImageLevel(int &current, int level, int (*setter)(sensor_t *, int)) {
+    level = constrain(level, kMinImageLevel, kMaxImageLevel);
+    sensor_t *sensor = esp_camera_sensor_get();
+    if (level == current || !sensor || !setter || setter(sensor, level) != 0)
+        return false;
+    current = level;
     return true;
 }
 
