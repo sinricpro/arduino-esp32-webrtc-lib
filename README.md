@@ -183,7 +183,7 @@ The [HardwareCheck example](examples/HardwareCheck/HardwareCheck.ino) provides c
 Depend on the registry package, which carries the 3.3.11 archives:
 
 ```ini
-lib_deps = sinricpro/SinricProWebRTC@^0.2.1
+lib_deps = sinricpro/SinricProWebRTC@^0.3.0
 ```
 
 For a core other than 3.3.11, point `lib_deps` at that core's release asset instead:
