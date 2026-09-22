@@ -350,7 +350,9 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     // Milliseconds the ICE agent waits for a reply. A LAN round trip is a couple of ms, but a
     // smart display answers from a distant region: at 10 ms the DTLS ClientHello timed out long
     // before the reply arrived and the handshake retried forever. Espressif's examples use 500.
-    peerDefaults_.agent_recv_timeout = 500;
+    // esp_peer_main_loop() can block for most of it, and the JPEG sender moves one fragment per
+    // loop, so 500 caps a JPEG session near 5 kB/s. Smart displays only take the H.264 path.
+    peerDefaults_.agent_recv_timeout = videoActive_ ? 500 : 100;
     // The configured caches are sized for JPEG fragments. An H.264 session sends its video over RTP
     // and leaves the channel carrying only JSON controls, which kMaxControlBytes caps at 512, so
     // holding 48 kB of internal RAM for it starves the Wi-Fi driver: measured on a XIAO ESP32-S3,
