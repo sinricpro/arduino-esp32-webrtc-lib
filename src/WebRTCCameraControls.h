@@ -5,15 +5,21 @@
 // Camera settings a viewer can change over the DataChannel, plus automatic quality adaptation.
 // Control messages are UTF-8 JSON text; binary messages carry JPEG fragments.
 //   device -> viewer  {"type":"capabilities","resolutions":["QVGA","VGA","SVGA"],"minFps":1,"maxFps":15,
-//                      "flash":true,"flip":true,"mirror":true}
+//                      "flash":true,"flip":true,"mirror":true,"brightness":true,"contrast":true,
+//                      "aeLevel":true,"minImageLevel":-2,"maxImageLevel":2}
 //   device -> viewer  {"type":"state","resolution":"VGA","fps":5,"flash":false,"flip":false,"mirror":false,
+//                      "brightness":0,"contrast":0,"aeLevel":0,
 //                      "autoQuality":true,"qualityLevel":0,"effectiveFps":5.0}
-//   viewer -> device  {"type":"set", ...any of resolution, fps, flash, flip, mirror, autoQuality}
+//   viewer -> device  {"type":"set", ...any of resolution, fps, flash, flip, mirror, brightness,
+//                      contrast, aeLevel, autoQuality}
 // Not thread-safe: use it from the task that owns the peer.
 class WebRTCCameraControls {
 public:
     static constexpr int kMinFps = 1;
     static constexpr int kMaxFps = 15;
+    // Range esp32-camera accepts for brightness, contrast and auto-exposure level.
+    static constexpr int kMinImageLevel = -2;
+    static constexpr int kMaxImageLevel = 2;
 
     // Call after esp_camera_init(). maxFrameSize must not exceed the size the camera was
     // initialized with (its JPEG buffers are sized for that); FRAMESIZE_INVALID = current size.
@@ -49,6 +55,7 @@ private:
     bool setFlip(bool on);
     bool setMirror(bool on);
     bool setAutoQuality(bool on);
+    bool setImageLevel(int &current, int level, int (*setter)(sensor_t *, int));
     void setLevel(uint8_t level);
 
     framesize_t frameSize_ = FRAMESIZE_VGA;
@@ -63,6 +70,9 @@ private:
     bool flash_ = false;
     bool flip_ = false;
     bool mirror_ = false;
+    int brightness_ = 0;
+    int contrast_ = 0;
+    int aeLevel_ = 0;
     bool autoQuality_ = true;
     uint8_t level_ = 0;
     uint8_t congestedFrames_ = 0;
