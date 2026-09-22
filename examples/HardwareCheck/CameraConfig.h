@@ -252,6 +252,9 @@ inline camera_config_t config(Board board) {
         camera.pin_pclk = 19;
         camera.pin_pwdn = 26;
         camera.pin_reset = -1;
+        // At 20 MHz the camera interferes with this board's Wi-Fi: TX buffers stop draining and
+        // sendto() fails with ENOMEM once a stream reaches VGA.
+        camera.xclk_freq_hz = 10000000;
         break;
     }
     return camera;

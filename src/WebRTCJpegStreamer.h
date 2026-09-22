@@ -7,18 +7,14 @@
 // Streams esp_camera JPEG frames over a WebRTC DataChannel in bounded fragments.
 // Wire format per message: four little-endian uint32 (magic 0x47504A53, frame id, total length,
 // offset) followed by up to kChunkSize bytes. Viewers reassemble by frame id and offset.
-// Call loop() from the task that owns the peer; each call sends a bounded burst of fragments and
-// returns so ICE/SCTP processing keeps running between bursts.
+// Call loop() from the task that owns the peer; it sends at most one fragment per call so
+// ICE/SCTP processing keeps running between fragments.
 class WebRTCJpegStreamer {
 public:
     static constexpr uint32_t kMagic = 0x47504A53;
     static constexpr size_t kHeaderSize = 16;
     static constexpr size_t kChunkSize = 1024;
     static constexpr uint32_t kStallMs = 1000;
-    // esp_peer_main_loop() blocks for up to agent_recv_timeout, so the session loop runs only a few
-    // times a second. Each fragment goes straight to UDP, and a larger burst runs classic ESP32's
-    // Wi-Fi TX buffers out (sendto ENOMEM), which can wedge DTLS.
-    static constexpr size_t kBurstFragments = 4;
 
     enum class Result { Idle, Sending, Completed, Abandoned };
 
@@ -55,19 +51,15 @@ public:
         }
 
         uint8_t packet[kHeaderSize + kChunkSize];
-        int ret = 0;
-        for (size_t burst = 0; burst < kBurstFragments && offset_ < frame_->len; ++burst) {
-            uint32_t header[] = {kMagic, frameId_, static_cast<uint32_t>(frame_->len), static_cast<uint32_t>(offset_)};
-            memcpy(packet, header, sizeof(header));
-            size_t bytes = std::min(kChunkSize, frame_->len - offset_);
-            memcpy(packet + kHeaderSize, frame_->buf + offset_, bytes);
+        uint32_t header[] = {kMagic, frameId_, static_cast<uint32_t>(frame_->len), static_cast<uint32_t>(offset_)};
+        memcpy(packet, header, sizeof(header));
+        size_t bytes = std::min(kChunkSize, frame_->len - offset_);
+        memcpy(packet + kHeaderSize, frame_->buf + offset_, bytes);
 
-            ret = rtc.sendBinary(channel, packet, bytes + kHeaderSize);
-            if (ret != 0)
-                break;
+        int ret = rtc.sendBinary(channel, packet, bytes + kHeaderSize);
+        if (ret == 0)
             offset_ += bytes;
-        }
-        if (ret == ESP_PEER_ERR_WOULD_BLOCK)
+        else if (ret == ESP_PEER_ERR_WOULD_BLOCK)
             ++blockedSends_;
         if (offset_ == frame_->len)
             return finish(Result::Completed);
