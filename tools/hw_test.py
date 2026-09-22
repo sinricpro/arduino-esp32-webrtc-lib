@@ -225,7 +225,14 @@ def main(argv=None):
         if not args.port or (not args.no_flash and not (args.sketch and args.fqbn)):
             p.error('--port is required, and --sketch and --fqbn unless --no-flash')
         if not args.no_flash:
-            build_and_flash(args, Path(args.output).parent / 'build')
+            try:
+                build_and_flash(args, Path(args.output).parent / 'build')
+            except subprocess.CalledProcessError as error:
+                # arduino-cli has already printed why; a native-USB board that dropped off the bus
+                # needs replugging, or BOOT held while plugging in.
+                step = 'upload' if error.cmd[1] == 'upload' else 'build'
+                print(f'FAIL\n  - {step} failed (arduino-cli exit {error.returncode})')
+                return 1
         text = capture(args.port, args.seconds, not args.no_reset, args.output)
 
     metrics = parse_log(text)
