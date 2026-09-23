@@ -46,7 +46,7 @@ python tools/build_archives.py --core-version $coreVersion --target esp32
 python tools/build_archives.py --core-version $coreVersion --target esp32s3
 python tests/archives.py --core-version $coreVersion
 python tools/prepare_library.py --core-version $coreVersion
-python -m unittest discover -s tests -p test_build_config.py
+python -m unittest discover -s tests -p "test_*.py"
 node tests/viewer.test.cjs
 python tools/compile_matrix.py --core-version $coreVersion
 python tools/package.py --core-version $coreVersion
