@@ -137,6 +137,8 @@ Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.
 
 JPEG camera streaming requires the included viewer; it is not a native WebRTC video track. H.264 encoding is available on ESP32-S3 only, where it is capped near 320 x 240 by the software encoder. Speaker playback, two-way audio, and acoustic echo cancellation are not included. Microphones on other board profiles are disabled by default.
 
+**An H.264 video track and an audio track do not run well together.** Measured on a XIAO ESP32S3 Sense: video alone delivers about 3 fps with no loss, but with a PCMU track negotiated the viewer loses roughly two thirds of the video packets and decodes nothing, while the audio itself arrives intact and the device reports every frame as sent. Enlarging `rtp_cfg.send_queue_num` to 128 and `send_pool_size` to 112 kB did not change it. The SinricPro portal and app therefore request audio only when the viewer turns it on. Offer both tracks only if you have verified the combination on your own board.
+
 The example uses direct connections on a trusted LAN. HTTP signaling and the viewer token are unencrypted, although WebRTC media and data transport are encrypted. Its browser candidate adapter assumes a direct LAN connection and does not support reverse proxies or NAT. Remote access requires authenticated HTTPS/WebSocket signaling and suitable ICE/STUN/TURN configuration.
 
 ## Library API
