@@ -16,8 +16,10 @@ constexpr size_t kMaxControlBytes = 512;
 constexpr int32_t kWeakSignalDbm = -75;
 constexpr size_t kAudioFrameBytes = 160;  // 20 ms of 8 kHz PCMU
 constexpr uint32_t kAudioFrameMs = 20;
-// 500 ms of audio, enough for the slowest loop seen while encoding H.264.
-constexpr uint8_t kMaxAudioFramesPerLoop = 25;
+// PCMU needs 50 frames a second and the loop runs about 25 times a second during a session, so
+// two per iteration keeps up and the rest is headroom to catch up after a stall. Larger bursts
+// hand the Wi-Fi driver more packets at once than it can retire, and sendto() starts failing.
+constexpr uint8_t kMaxAudioFramesPerLoop = 4;
 // Held below Config::answerTimeoutMs so the answer still goes out within Alexa's 6 s budget.
 constexpr uint32_t kRelayWaitMs = 3500;
 
