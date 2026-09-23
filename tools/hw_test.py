@@ -175,9 +175,14 @@ def capture(port_name, seconds, reset, output):
     connection.rts = False
     connection.port = port_name
     connection.open()
-    interesting = re.compile(r'DIAG|WebRTC|deferred|mbedtls|DTLS|Heap free|Connected to SinricPro')
-    chunks, pending = [], ''
-    with connection as port:
+    # Anything that ends or explains a session, so a run that dies is visible while it happens
+    # rather than only in the log afterwards.
+    interesting = re.compile(r'DIAG|WebRTC|deferred|mbedtls|DTLS|Heap free|Connected to SinricPro|'
+                             r'Disconnected|payload too big|rst:0x|Guru Meditation|Backtrace')
+    pending = ''
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    log = Path(output).open('w', encoding='utf-8', newline='')
+    with connection as port, log:
         if reset:
             port.rts = True
             time.sleep(0.15)
@@ -188,16 +193,16 @@ def capture(port_name, seconds, reset, output):
             data = port.read(port.in_waiting or 1)
             if not data:
                 continue
-            chunks.append(data)
-            pending += data.decode('utf-8', errors='replace')
+            text = data.decode('utf-8', errors='replace')
+            # Flushed per chunk: a capture stopped part way through still leaves a readable log.
+            log.write(text)
+            log.flush()
+            pending += text
             *lines, pending = pending.split('\n')
             for line in lines:
                 if interesting.search(line):
                     print(line.rstrip(), flush=True)
-    text = b''.join(chunks).decode('utf-8', errors='replace')
-    Path(output).parent.mkdir(parents=True, exist_ok=True)
-    Path(output).write_text(text, encoding='utf-8')
-    return text
+    return Path(output).read_text(encoding='utf-8', errors='replace')
 
 
 def main(argv=None):
