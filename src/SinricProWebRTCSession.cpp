@@ -16,6 +16,12 @@ constexpr size_t kMaxControlBytes = 512;
 constexpr int32_t kWeakSignalDbm = -75;
 constexpr size_t kAudioFrameBytes = 160;  // 20 ms of 8 kHz PCMU
 constexpr uint32_t kAudioFrameMs = 20;
+// PCMU needs 50 frames a second and the loop runs about 25 times a second during a session, so
+// two per iteration keeps up and the rest is headroom to catch up after a stall. Larger bursts
+// hand the Wi-Fi driver more packets at once than it can retire, and sendto() starts failing.
+constexpr uint8_t kMaxAudioFramesPerLoop = 4;
+// Held below Config::answerTimeoutMs so the answer still goes out within Alexa's 6 s budget.
+constexpr uint32_t kRelayWaitMs = 3500;
 
 // A viewer that can render a video track offers H.264. Older viewers offer no video at all and
 // keep the JPEG path, which is what makes this backward compatible.
@@ -161,7 +167,12 @@ void SinricProWebRTCSession::run() {
             freeCommand(cmd);
         }
 
-        pollAudio();
+        // The source holds one 20 ms frame per call, so a single call per iteration starves the
+        // viewer whenever the loop is slow: an H.264 session runs it about five times a second,
+        // against the 50 frames a second PCMU needs. Measured in a browser before this, 59% of the
+        // audio was concealed. Bounded so a stalled loop cannot spend the whole iteration here.
+        for (uint8_t frames = 0; frames < kMaxAudioFramesPerLoop && pollAudio(); ++frames) {
+        }
 
         if (rtc_.handle()) {
 #ifdef SINRICPRO_WEBRTC_DIAG
@@ -183,7 +194,15 @@ void SinricProWebRTCSession::run() {
 
             const uint32_t now = millis();
             if (!answerPublished_) {
-                if (localSdp_.length() && now - lastSignal_ >= kCandidateSettleMs) {
+                // A TURN allocation lands well after the host and server-reflexive candidates. The
+                // viewer cannot reach this device's host address (its own are mDNS names esp_peer
+                // rejects), so an answer published without a relay candidate leaves only
+                // viewer-relay to device-srflx, which fails behind a symmetric NAT.
+                const bool waitingForRelay = turnConfigured_ && !hasRelayCandidate() &&
+                                             now - sessionStarted_ < kRelayWaitMs;
+                if (localSdp_.length() && !waitingForRelay && now - lastSignal_ >= kCandidateSettleMs) {
+                    if (turnConfigured_ && !hasRelayCandidate())
+                        log_w("Answering without a relay candidate after %u ms", kRelayWaitMs);
                     publishAnswer(true);
                 } else if (now - sessionStarted_ >= config_.answerTimeoutMs) {
                     log_w("No local SDP within %u ms", config_.answerTimeoutMs);
@@ -283,16 +302,25 @@ void SinricProWebRTCSession::streamToViewer() {
         statePending_ = true;
 }
 
-void SinricProWebRTCSession::pollAudio() {
+// Returns true when a frame was taken from the source, so the caller can drain what is queued.
+bool SinricProWebRTCSession::pollAudio() {
     if (!audioSource_)
-        return;
+        return false;
 
     uint8_t pcmu[kAudioFrameBytes];
     if (!audioSource_(pcmu, sizeof(pcmu)))
-        return;
+        return false;
     if (audioActive_ && channelOpen_)
         rtc_.sendAudio(pcmu, sizeof(pcmu), audioPts_);
     audioPts_ += kAudioFrameMs;
+    return true;
+}
+
+bool SinricProWebRTCSession::hasRelayCandidate() const {
+    for (const String &candidate : localCandidates_)
+        if (candidate.indexOf(" typ relay") >= 0)
+            return true;
+    return false;
 }
 
 // The encoder reads YUV422 and the JPEG path needs JPEG, so the camera is re-initialised for the
@@ -356,7 +384,10 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     if (iceServers_.size() > kMaxIceServers)
         iceServers_.resize(kMaxIceServers);
     iceServerCfg_.clear();
+    turnConfigured_ = false;
     for (WebRTCIceServer &server : iceServers_) {
+        if (server.url.startsWith("turn:") || server.url.startsWith("turns:"))
+            turnConfigured_ = true;
         esp_peer_ice_server_cfg_t cfg = {};
         cfg.stun_url = const_cast<char *>(server.url.c_str());
         cfg.user = server.username.length() ? const_cast<char *>(server.username.c_str()) : nullptr;

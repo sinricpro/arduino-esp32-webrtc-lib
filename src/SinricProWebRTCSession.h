@@ -116,7 +116,8 @@ private:
     void startPeer(Command &cmd);
     void closePeer();
     void publishAnswer(bool ok, const String &error = String());
-    void pollAudio();
+    bool pollAudio();
+    bool hasRelayCandidate() const;
     void streamToViewer();
     bool selectCameraFormat(bool yuv);
     void startH264();
@@ -166,6 +167,7 @@ private:
     void reportDiag();
 #endif
     uint32_t lastSignal_ = 0;
+    bool turnConfigured_ = false;
     uint32_t audioPts_ = 0;
     bool answerPublished_ = true;
     bool closeRequested_ = false;
