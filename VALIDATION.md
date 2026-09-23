@@ -162,7 +162,7 @@ opt-in and does not scan the network or upload firmware.
 | Second viewer replaces the first cleanly | Not yet verified |
 | Controls: resolution (QVGA..SVGA), fps, flash (AI-Thinker GPIO 4), flip, mirror apply live | Not yet verified |
 | Automatic quality steps down on a throttled link and recovers | Not yet verified |
-| XIAO ESP32S3 Sense microphone audible in portal and app | Not yet verified (mic path compiles) |
+| XIAO ESP32S3 Sense microphone audible in portal and app | PASS with video only; the viewer receives 41 PCMU packets a second with nothing lost or concealed. Alongside an H.264 track it costs the video: see the README limits. |
 | Firmware before SDK 5.1.0 shows the update-firmware message | Not yet verified |
 
 ## H.264 video track (ESP32-S3) — 2026-09-16
