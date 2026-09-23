@@ -259,7 +259,8 @@ LAN, streaming QVGA and then switching to VGA, judged with `hw_test.py --log`.
 | LILYGO T-Camera | 100 ms timeout, XCLK 20 MHz | FAIL | 449 deferred sends, 38 WANT_WRITE; the channel wedged at the VGA switch |
 | LILYGO T-Camera | **0.3.0: 100 ms timeout, XCLK 10 MHz** | **PASS** | 1.21 fps over 243 s, QVGA and VGA, no drops, RSSI −66 to −60 dBm |
 | AI-Thinker ESP32-CAM | 0.3.0 | not measured | the test board sat at −80 to −89 dBm; one session failed on the link with 1,089 deferred sends |
-| XIAO ESP32S3 Sense | 0.3.0, H.264 and JPEG | not measured with `hw_test.py` | H.264 figures above predate the tool |
+| XIAO ESP32S3 Sense | 0.3.1, H.264, video only | **PASS** | 2.97 fps over 232 s, 690 frames, none dropped, no deferred sends, heap flat |
+| XIAO ESP32S3 Sense | 0.3.1, H.264 with a PCMU audio track | **FAIL** | audio perfect (41 packets/s, 0 lost, 0 concealed) but the viewer loses about two thirds of the video packets and decodes nothing; see the README limits |
 
 To add a row, build with `-DSINRICPRO_WEBRTC_DIAG` and run the tool against the board:
 
