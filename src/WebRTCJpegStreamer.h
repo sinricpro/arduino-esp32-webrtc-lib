@@ -7,14 +7,21 @@
 // Streams esp_camera JPEG frames over a WebRTC DataChannel in bounded fragments.
 // Wire format per message: four little-endian uint32 (magic 0x47504A53, frame id, total length,
 // offset) followed by up to kChunkSize bytes. Viewers reassemble by frame id and offset.
-// Call loop() from the task that owns the peer; it sends at most one fragment per call so
-// ICE/SCTP processing keeps running between fragments.
+// Call loop() from the task that owns the peer; each call sends at most kBurstFragments and
+// returns so ICE/SCTP processing keeps running between them.
 class WebRTCJpegStreamer {
 public:
     static constexpr uint32_t kMagic = 0x47504A53;
     static constexpr size_t kHeaderSize = 16;
     static constexpr size_t kChunkSize = 1024;
+    // A frame is abandoned when no fragment has gone out for kStallMs, or after kMaxFrameMs in all.
+    // Timing the whole frame against 1 s discarded every frame on a slow but working link: at
+    // -78 dBm about 6 kB/s moves, and a frame is larger than that.
     static constexpr uint32_t kStallMs = 1000;
+    static constexpr uint32_t kMaxFrameMs = 5000;
+    // Fragments per call. One is slow but survives a weak link: at -81 dBm even four at once ran
+    // classic ESP32's Wi-Fi TX buffers out (sendto ENOMEM) and wedged the session for good.
+    static constexpr size_t kBurstFragments = 1;
 
     enum class Result { Idle, Sending, Completed, Abandoned };
 
@@ -42,7 +49,7 @@ public:
             frame_ = esp_camera_fb_get();
             if (!frame_)
                 return Result::Idle;
-            frameStarted_ = millis();
+            frameStarted_ = lastProgress_ = millis();
             // Oversized frames count as congestion so automatic quality can compress harder.
             if (frame_->format != PIXFORMAT_JPEG || frame_->len > maxFrameBytes_)
                 return finish(Result::Abandoned);
@@ -51,20 +58,27 @@ public:
         }
 
         uint8_t packet[kHeaderSize + kChunkSize];
-        uint32_t header[] = {kMagic, frameId_, static_cast<uint32_t>(frame_->len), static_cast<uint32_t>(offset_)};
-        memcpy(packet, header, sizeof(header));
-        size_t bytes = std::min(kChunkSize, frame_->len - offset_);
-        memcpy(packet + kHeaderSize, frame_->buf + offset_, bytes);
+        int ret = 0;
+        for (size_t burst = 0; burst < kBurstFragments && offset_ < frame_->len; ++burst) {
+            uint32_t header[] = {kMagic, frameId_, static_cast<uint32_t>(frame_->len), static_cast<uint32_t>(offset_)};
+            memcpy(packet, header, sizeof(header));
+            size_t bytes = std::min(kChunkSize, frame_->len - offset_);
+            memcpy(packet + kHeaderSize, frame_->buf + offset_, bytes);
 
-        int ret = rtc.sendBinary(channel, packet, bytes + kHeaderSize);
-        if (ret == 0)
+            ret = rtc.sendBinary(channel, packet, bytes + kHeaderSize);
+            if (ret != 0)
+                break;
             offset_ += bytes;
-        else if (ret == ESP_PEER_ERR_WOULD_BLOCK)
+            lastProgress_ = millis();
+        }
+        if (ret == ESP_PEER_ERR_WOULD_BLOCK)
             ++blockedSends_;
         if (offset_ == frame_->len)
             return finish(Result::Completed);
         // Abandon frames that stall on a congested link so the viewer gets a fresh one instead.
-        if (millis() - frameStarted_ > kStallMs || (ret && ret != ESP_PEER_ERR_WOULD_BLOCK))
+        const uint32_t now = millis();
+        if (now - lastProgress_ > kStallMs || now - frameStarted_ > kMaxFrameMs ||
+            (ret && ret != ESP_PEER_ERR_WOULD_BLOCK))
             return finish(Result::Abandoned);
         return Result::Sending;
     }
@@ -93,6 +107,7 @@ private:
     uint32_t frameId_ = 0;
     uint32_t lastFrame_ = 0;
     uint32_t frameStarted_ = 0;
+    uint32_t lastProgress_ = 0;
     uint32_t lastFrameDurationMs_ = 0;
     uint32_t blockedSends_ = 0;
     uint32_t lastBlockedSends_ = 0;

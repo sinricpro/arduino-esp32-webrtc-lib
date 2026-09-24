@@ -1,5 +1,7 @@
 #include "SinricProWebRTCSession.h"
 #include <WiFi.h>
+#include <esp_timer.h>
+#include <esp_wifi.h>
 #include <algorithm>
 #include <cstring>
 
@@ -22,6 +24,13 @@ constexpr uint32_t kAudioFrameMs = 20;
 constexpr uint8_t kMaxAudioFramesPerLoop = 4;
 // Held below Config::answerTimeoutMs so the answer still goes out within Alexa's 6 s budget.
 constexpr uint32_t kRelayWaitMs = 3500;
+// JPEG frames arrive every 1.2 s at the lowest quality, so this is many missed frames in a row.
+constexpr uint32_t kDeadSessionMs = 15000;
+// Once a weak link runs the Wi-Fi TX buffers out, even a new session's handshake cannot send and
+// only a reconnect or restart clears it. A normal esp_peer_main_loop() call stays under about 2 s.
+constexpr uint32_t kWifiRecoverAfterMs = 8000;
+// A second wedge this soon after a reconnect means the reconnect did not help; restart instead.
+constexpr uint32_t kWifiRecoveryWindowMs = 60000;
 
 // A viewer that can render a video track offers H.264. Older viewers offer no video at all and
 // keep the JPEG path, which is what makes this backward compatible.
@@ -73,8 +82,24 @@ bool SinricProWebRTCSession::begin(const Config &config) {
     // Pinned to core 0, beside WiFi and TLS, so core 1 belongs to the H.264 encoder alone. Left
     // unpinned it lands on core 1 too, and two busy tasks of equal priority there keep the idle
     // task off the core entirely, which trips the task watchdog and slows the encoder.
-    return xTaskCreatePinnedToCore(taskEntry, "webrtc", config_.taskStackSize, this,
-                                   config_.taskPriority, &task_, 0) == pdPASS;
+    if (xTaskCreatePinnedToCore(taskEntry, "webrtc", config_.taskStackSize, this,
+                                config_.taskPriority, &task_, 0) != pdPASS)
+        return false;
+    // Runs outside the session task, because the stall it watches for is that task never returning.
+    // An esp_timer callback shares the timer task's stack instead of costing a task's internal RAM.
+    if (config_.peerStallRestartMs) {
+        const esp_timer_create_args_t args = {
+            .callback = watchdogEntry,
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "webrtc_wd",
+            .skip_unhandled_events = true,
+        };
+        esp_timer_handle_t timer = nullptr;
+        if (esp_timer_create(&args, &timer) == ESP_OK)
+            esp_timer_start_periodic(timer, 1000 * 1000);
+    }
+    return true;
 }
 
 bool SinricProWebRTCSession::handleOffer(const String &offerSdp, const std::vector<WebRTCIceServer> &iceServers,
@@ -156,7 +181,46 @@ void SinricProWebRTCSession::taskEntry(void *arg) {
     static_cast<SinricProWebRTCSession *>(arg)->run();
 }
 
+void SinricProWebRTCSession::watchdogEntry(void *arg) {
+    auto *self = static_cast<SinricProWebRTCSession *>(arg);
+    // Connecting in the same tick as the disconnect races the driver's own teardown.
+    if (self->wifiReconnectPending_) {
+        self->wifiReconnectPending_ = false;
+        esp_wifi_connect();
+        return;
+    }
+
+    const uint32_t now = millis();
+    const uint32_t enteredMs = self->peerLoopEnteredMs_;
+    const uint32_t stuckMs = now - enteredMs;
+    if (self->inPeerLoop_ && stuckMs > self->config_.peerStallRestartMs) {
+        // esp_peer gives no way to abort the call from outside, so only a restart recovers.
+        log_e("esp_peer_main_loop() has not returned for %lu ms; restarting", static_cast<unsigned long>(stuckMs));
+        esp_restart();
+    }
+
+    // Dropping the link makes esp_peer's pending sends fail outright, which ends a handshake stuck
+    // retrying them, and the driver discards its TX queue.
+    const bool stuck = self->inPeerLoop_ && stuckMs > kWifiRecoverAfterMs && self->recoveredLoopMs_ != enteredMs;
+    if (!stuck && !self->wifiRecoveryRequested_)
+        return;
+    self->wifiRecoveryRequested_ = false;
+    if (stuck)
+        self->recoveredLoopMs_ = enteredMs;
+    if (self->lastWifiRecoveryMs_ && now - self->lastWifiRecoveryMs_ < kWifiRecoveryWindowMs) {
+        log_e("Wi-Fi still cannot send after a reconnect; restarting");
+        esp_restart();
+    }
+    log_w("Wi-Fi TX looks wedged; reconnecting");
+    self->lastWifiRecoveryMs_ = now;
+    esp_wifi_disconnect();
+    self->wifiReconnectPending_ = true;
+}
+
 void SinricProWebRTCSession::run() {
+    // newlib creates a task's stdout lock on first use and aborts if that allocation fails. Take it
+    // now, before a DTLS handshake exhausts internal RAM and esp_peer logs a deferred sendto.
+    fflush(stdout);
     for (;;) {
         Command cmd;
         while (xQueueReceive(commands_, &cmd, 0) == pdTRUE) {
@@ -178,7 +242,10 @@ void SinricProWebRTCSession::run() {
 #ifdef SINRICPRO_WEBRTC_DIAG
             const uint32_t loopStart = micros();
 #endif
+            peerLoopEnteredMs_ = millis();
+            inPeerLoop_ = true;
             rtc_.loop();
+            inPeerLoop_ = false;
 #ifdef SINRICPRO_WEBRTC_DIAG
             const uint32_t loopUs = micros() - loopStart;
             diag_.loopUs += loopUs;
@@ -296,6 +363,16 @@ void SinricProWebRTCSession::streamToViewer() {
         diag_.sendMs += streamer_.lastFrameDurationMs();
         diag_.blocked += streamer_.lastBlockedSends();
 #endif
+        if (result == WebRTCJpegStreamer::Result::Completed)
+            lastFrameDeliveredMs_ = millis();
+    }
+
+    // A weak link can wedge the radio for good: the channel stays open but nothing moves again.
+    // Closing lets the viewer see a failure and reconnect instead of watching a frozen frame.
+    if (millis() - lastFrameDeliveredMs_ > kDeadSessionMs) {
+        log_w("No frame delivered for %lu ms; closing the session", static_cast<unsigned long>(kDeadSessionMs));
+        closeRequested_ = true;
+        wifiRecoveryRequested_ = true;
     }
 
     if (controls_.takeStateChanged())
@@ -435,9 +512,10 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     // Milliseconds the ICE agent waits for a reply. A LAN round trip is a couple of ms, but a
     // smart display answers from a distant region: at 10 ms the DTLS ClientHello timed out long
     // before the reply arrived and the handshake retried forever. Espressif's examples use 500.
-    // esp_peer_main_loop() can block for most of it, and the JPEG sender moves one fragment per
-    // loop, so 500 caps a JPEG session near 5 kB/s. Smart displays only take the H.264 path.
-    peerDefaults_.agent_recv_timeout = videoActive_ ? 500 : 100;
+    // TURN allocations wait on it too, so it must exceed the round trip to the TURN server: at
+    // 100 ms JPEG sessions never received their relay candidate (~300 ms away), and remote
+    // viewing then fails behind a symmetric NAT.
+    peerDefaults_.agent_recv_timeout = 500;
     // The configured caches are sized for JPEG fragments. An H.264 session sends its video over RTP
     // and leaves the channel carrying only JSON controls, which kMaxControlBytes caps at 512, so
     // holding 48 kB of internal RAM for it starves the Wi-Fi driver: measured on a XIAO ESP32-S3,
@@ -566,6 +644,11 @@ int SinricProWebRTCSession::onChannelOpen(esp_peer_data_channel_info_t *ch, void
     auto *self = static_cast<SinricProWebRTCSession *>(ctx);
     self->channelId_ = ch->stream_id;
     self->channelOpen_ = true;
+    self->lastFrameDeliveredMs_ = millis();
+    // Full-quality frames on a weak link overflow the Wi-Fi TX buffers before automatic quality
+    // sees a single dropped frame, and that overflow does not clear. Start low and let it climb.
+    if (!self->videoActive_)
+        self->controls_.startSession(WiFi.RSSI() < kWeakSignalDbm);
     self->capabilitiesPending_ = self->statePending_ = true;
     return 0;
 }

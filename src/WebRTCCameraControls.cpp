@@ -23,6 +23,10 @@ const QualityLevel kLevels[] = {{100, 0}, {150, 0}, {200, 6}, {300, 12}, {400, 1
 constexpr uint8_t kLevelCount = sizeof(kLevels) / sizeof(kLevels[0]);
 constexpr uint8_t kDegradeAfterFrames = 2;
 constexpr uint8_t kRecoverAfterFrames = 20;
+// Where a -77 dBm link settled: QVGA held level 3 (about 3 kB frames). At level 3 a VGA frame is
+// about 16 kB and took 4.1 s, close to the streamer's 5 s limit, so VGA and up start one lower.
+constexpr uint8_t kReducedStartLevel = 3;
+constexpr uint8_t kReducedStartLevelVga = 4;
 constexpr int kMaxJpegQuality = 63;  // esp32-camera: higher number = stronger compression
 
 // Minimal lookups for the flat JSON objects the SinricPro viewers send.
@@ -175,10 +179,29 @@ void WebRTCCameraControls::onFrameResult(bool completed, uint32_t durationMs) {
 }
 
 void WebRTCCameraControls::viewerLeft() {
+    weakLink_ = false;
     setFlash(false);
     if (level_ > 0)
         setLevel(0);
     stateChanged_ = false;
+}
+
+void WebRTCCameraControls::startSession(bool weakLink) {
+    weakLink_ = weakLink;
+    if (!weakLink || h264Active_)
+        return;
+    // At -77 dBm an SVGA frame is about 15 kB even at the strongest compression, and sending one
+    // takes long enough that a single Wi-Fi hiccup overflows the TX buffers.
+    sensor_t *sensor = esp_camera_sensor_get();
+    if (frameSize_ > selectableMax() && sensor && sensor->set_framesize(sensor, selectableMax()) == 0)
+        frameSize_ = selectableMax();
+    const uint8_t level = frameSize_ >= FRAMESIZE_VGA ? kReducedStartLevelVga : kReducedStartLevel;
+    if (autoQuality_ && level_ < level)
+        setLevel(level);
+}
+
+framesize_t WebRTCCameraControls::selectableMax() const {
+    return weakLink_ ? std::min(maxFrameSize_, FRAMESIZE_VGA) : maxFrameSize_;
 }
 
 uint32_t WebRTCCameraControls::frameIntervalMs() const {
@@ -210,7 +233,7 @@ String WebRTCCameraControls::capabilitiesJson() const {
     } else {
         bool first = true;
         for (const ResolutionName &resolution : kResolutions) {
-            if (resolution.size > maxFrameSize_)
+            if (resolution.size > selectableMax())
                 continue;
             if (!first)
                 json += ',';
@@ -277,12 +300,14 @@ bool WebRTCCameraControls::setResolution(const String &name) {
         return false;
     sensor_t *sensor = esp_camera_sensor_get();
     for (const ResolutionName &resolution : kResolutions) {
-        if (name != resolution.name || resolution.size > maxFrameSize_)
+        if (name != resolution.name || resolution.size > selectableMax())
             continue;
         if (resolution.size == frameSize_ || !sensor || sensor->set_framesize(sensor, resolution.size) != 0)
             return false;
         frameSize_ = resolution.size;
-        setLevel(0);
+        // Keep the quality level: a link slow enough to need it is no faster at a new size, and
+        // restarting at full quality flooded a -80 dBm link until the session wedged.
+        congestedFrames_ = goodFrames_ = 0;
         return true;
     }
     return false;
@@ -293,7 +318,8 @@ bool WebRTCCameraControls::setFps(int fps) {
     if (fps == fps_)
         return false;
     fps_ = fps;
-    setLevel(0);
+    // As for resolution: keep the level the link has settled at.
+    congestedFrames_ = goodFrames_ = 0;
     return true;
 }
 

@@ -50,6 +50,13 @@ public:
         framesize_t maxFrameSize = FRAMESIZE_INVALID;
         int flashPin = -1;                      // flash LED GPIO (AI-Thinker ESP32-CAM: 4)
         bool audio = false;                     // send PCMU from setAudioSource() when the viewer offers audio
+        // Restart the device when one esp_peer_main_loop() call runs longer than this, 0 to disable.
+        // On a weak link the DTLS handshake can retry failed sends inside that call indefinitely,
+        // so the session is never closed and its traffic starves the SinricPro connection: the
+        // camera stays offline until power-cycled. Normal calls stay under about 2 s.
+        // Wi-Fi is reconnected first (after 8 s stuck, or a session with no frame for 15 s); 0
+        // disables that too.
+        uint32_t peerStallRestartMs = 20000;
 
         // Send H.264 on a WebRTC video track when the viewer offers one (ESP32-S3 only, where
         // esp_h264 encodes in software). A viewer that offers no video track still gets JPEG over
@@ -105,6 +112,7 @@ private:
     };
 
     static void taskEntry(void *arg);
+    static void watchdogEntry(void *arg);
     static int onMessage(esp_peer_msg_t *msg, void *ctx);
     static int onState(esp_peer_state_t state, void *ctx);
     static int onChannelOpen(esp_peer_data_channel_info_t *ch, void *ctx);
@@ -137,6 +145,16 @@ private:
     SemaphoreHandle_t offerLock_ = nullptr;
     TaskHandle_t task_ = nullptr;
 
+    // Written by the session task around esp_peer_main_loop(), read by the watchdog timer.
+    volatile bool inPeerLoop_ = false;
+    volatile uint32_t peerLoopEnteredMs_ = 0;
+    volatile bool wifiRecoveryRequested_ = false;
+
+    // Owned by the watchdog timer.
+    bool wifiReconnectPending_ = false;
+    uint32_t recoveredLoopMs_ = 0;
+    uint32_t lastWifiRecoveryMs_ = 0;
+
     // Owned by the handleOffer() caller.
     String lastError_;
 
@@ -147,6 +165,7 @@ private:
     std::vector<String> localCandidates_;
     uint32_t activeSequence_ = 0;
     uint32_t sessionStarted_ = 0;
+    uint32_t lastFrameDeliveredMs_ = 0;
 
 #ifdef SINRICPRO_WEBRTC_DIAG
     // Counters behind the DIAG serial line that tools/hw_test.py parses. Build with
