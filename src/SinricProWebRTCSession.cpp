@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
+#include <lwip/sockets.h>
 #include <algorithm>
 #include <cstring>
 
@@ -370,9 +371,15 @@ void SinricProWebRTCSession::streamToViewer() {
     // A weak link can wedge the radio for good: the channel stays open but nothing moves again.
     // Closing lets the viewer see a failure and reconnect instead of watching a frozen frame.
     if (millis() - lastFrameDeliveredMs_ > kDeadSessionMs) {
-        log_w("No frame delivered for %lu ms; closing the session", static_cast<unsigned long>(kDeadSessionMs));
+        // A viewer that vanished without closing also blocks every send, since nothing acknowledges
+        // them, so only the driver refusing a probe tells a wedged radio apart. Reconnecting Wi-Fi
+        // for a vanished viewer would just drop the SinricPro connection.
+        const bool wedged = wifiTxWedged();
+        log_w("No frame delivered for %lu ms (%s); closing the session", static_cast<unsigned long>(kDeadSessionMs),
+              wedged ? "Wi-Fi TX refuses packets" : "viewer stopped responding");
         closeRequested_ = true;
-        wifiRecoveryRequested_ = true;
+        if (wedged)
+            wifiRecoveryRequested_ = true;
     }
 
     if (controls_.takeStateChanged())
@@ -393,7 +400,36 @@ bool SinricProWebRTCSession::pollAudio() {
     return true;
 }
 
+// Sends a 1-byte datagram to the gateway's discard port through the same driver the session uses.
+// When the TX buffers are exhausted lwIP fails it with ENOMEM/ENOBUFS straight away.
+bool SinricProWebRTCSession::wifiTxWedged() {
+    const uint32_t gateway = static_cast<uint32_t>(WiFi.gatewayIP());
+    if (!gateway)
+        return false;
+    const int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0)
+        return false;
+    sockaddr_in to = {};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(9);
+    to.sin_addr.s_addr = gateway;
+    const uint8_t probe = 0;
+    bool wedged = true;
+    for (int attempt = 0; attempt < 3 && wedged; ++attempt) {
+        if (attempt)
+            delay(50);
+        if (sendto(fd, &probe, sizeof(probe), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&to), sizeof(to)) >= 0 ||
+            (errno != ENOMEM && errno != ENOBUFS))
+            wedged = false;
+    }
+    close(fd);
+    return wedged;
+}
+
 bool SinricProWebRTCSession::hasRelayCandidate() const {
+    // esp_peer can report the relay candidate inside its SDP instead of as a CANDIDATE message.
+    if (localSdp_.indexOf(" typ relay") >= 0)
+        return true;
     for (const String &candidate : localCandidates_)
         if (candidate.indexOf(" typ relay") >= 0)
             return true;
