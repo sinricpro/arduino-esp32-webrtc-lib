@@ -120,6 +120,8 @@ Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.
 
 **Automatic quality.** When frames take longer to send than the frame interval, or stall, the session first lowers the frame rate and then raises JPEG compression, recovering after a run of fast frames. The viewer sees the level in `state.qualityLevel` and `state.effectiveFps`.
 
+**Weak Wi-Fi.** Below −75 dBm a JPEG session starts at a reduced quality level (one step lower at VGA) and offers resolutions only up to VGA, because larger frames overflow the Wi-Fi transmit buffers before automatic quality reacts. Once those buffers stay exhausted, even a new session cannot complete its handshake, so the session recovers on its own: a session that delivers no frame for 15 s is closed, and Wi-Fi is reconnected when that happens or when the peer stays stuck for 8 s. If it wedges again within 60 s, or one peer loop call runs past `Config::peerStallRestartMs` (20 s), the device restarts. Set `peerStallRestartMs = 0` to disable the reconnect and the restart.
+
 **Microphone.** Set `Config::audio = true`, provide `setAudioSource()` (20 ms of 8 kHz PCMU per call) and call `camera.enableWebRTCAudio()` so viewers request an audio track. The examples enable the XIAO ESP32S3 Sense PDM microphone.
 
 **Video track (ESP32-S3).** Set `Config::h264 = true`, give `Config::cameraConfig` the same `camera_config_t` you passed to `WebRTCCamera::begin()`, and call `camera.enableWebRTCVideo()` so viewers offer a video track. The session then re-initialises the camera in YUV422, encodes with esp_h264 on its own task pinned to the second core, and sends H.264 over RTP while the DataChannel carries only the controls. `Config::h264Width` selects a mode: 320 x 240 at about 3 fps, or 640 x 480 at about 2 fps. A viewer with no DataChannel is a smart display and always gets 640 x 480, since Alexa and Google Home refuse anything below 480p. It restores JPEG mode when the viewer leaves. The encoder adds roughly 272 KB of flash and has no prebuilt library for classic ESP32, which keeps the DataChannel path.
@@ -177,6 +179,7 @@ Use one peer instance at a time. Serialize peer operations and keep configuratio
 | Camera fails to initialize (`0x106`) | Check the printed profile and pins. AI-Thinker ESP32-CAM needs `BOARD_AI_THINKER`, not `BOARD_ESP_EYE`; also check the ribbon, power, and PSRAM |
 | Viewer cannot connect | Same LAN, correct token, firewall rules, and Wi-Fi client isolation; disconnect a VPN if it prevents LAN ICE connectivity |
 | Audio does not play | Use XIAO Sense with `DOORBELL_MIC` enabled; press Play in the browser audio control if autoplay is blocked |
+| `Wi-Fi TX looks wedged; reconnecting`, or an unexpected restart | The Wi-Fi signal is too weak for the stream (see **Weak Wi-Fi**). Move the board or antenna closer to the access point, or choose a lower resolution |
 
 The [HardwareCheck example](examples/HardwareCheck/HardwareCheck.ino) provides camera, crypto, and peer initialization diagnostics. Select its camera profile before uploading.
 
@@ -185,7 +188,7 @@ The [HardwareCheck example](examples/HardwareCheck/HardwareCheck.ino) provides c
 Depend on the registry package, which carries the 3.3.11 archives:
 
 ```ini
-lib_deps = sinricpro/SinricProWebRTC@^0.3.1
+lib_deps = sinricpro/SinricProWebRTC@^0.4.0
 ```
 
 For a core other than 3.3.11, point `lib_deps` at that core's release asset instead:
