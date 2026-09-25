@@ -261,6 +261,10 @@ LAN, streaming QVGA and then switching to VGA, judged with `hw_test.py --log`.
 | AI-Thinker ESP32-CAM | 0.3.0 | not measured | the test board sat at −80 to −89 dBm; one session failed on the link with 1,089 deferred sends |
 | XIAO ESP32S3 Sense | 0.3.1, H.264, video only | **PASS** | 2.97 fps over 232 s, 690 frames, none dropped, no deferred sends, heap flat |
 | XIAO ESP32S3 Sense | 0.3.1, H.264 with a PCMU audio track | **FAIL** | audio perfect (41 packets/s, 0 lost, 0 concealed) but the viewer loses about two thirds of the video packets and decodes nothing; see the README limits |
+| XIAO ESP32S3 Sense | 0.4.0, H.264, portal and a Google Home display | **PASS** | 290 frames over 177 s, none dropped, no deferred sends |
+| AI-Thinker ESP32-CAM | 0.4.0, −77 dBm, reduced start, QVGA then VGA | FAIL | 83 frames, none dropped, but 2 transient WANT_WRITE; below the −75 dBm requirement, and the stream never stopped |
+| AI-Thinker ESP32-CAM | 0.4.0, −77 dBm, VGA then SVGA | FAIL | SVGA frames (15 kB at the strongest compression) wedged the TX buffers; the Wi-Fi reconnect recovered both wedges without a restart. 0.4.0 therefore hides SVGA and larger below −75 dBm, which is not yet measured on hardware |
+| AI-Thinker ESP32-CAM | 0.4.0, iPhone hotspot (carrier NAT) | **PASS** | 37 frames, none dropped |
 
 To add a row, build with `-DSINRICPRO_WEBRTC_DIAG` and run the tool against the board:
 
