@@ -126,6 +126,7 @@ private:
     void publishAnswer(bool ok, const String &error = String());
     bool pollAudio();
     bool hasRelayCandidate() const;
+    static bool wifiTxWedged();
     void streamToViewer();
     bool selectCameraFormat(bool yuv);
     void startH264();
