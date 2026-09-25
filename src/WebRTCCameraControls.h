@@ -38,6 +38,10 @@ public:
     // Restores full quality and turns the flash off when the viewer disconnects.
     void viewerLeft();
 
+    // Call when a DataChannel viewer connects. A weak link starts at a reduced quality level, from
+    // which automatic quality can climb, and cannot select sizes above VGA for this session.
+    void startSession(bool weakLink);
+
     // Re-applies the remembered sensor settings after the camera has been re-initialised.
     void reapply(bool includeFrameSize);
 
@@ -57,9 +61,11 @@ private:
     bool setAutoQuality(bool on);
     bool setImageLevel(int &current, int level, int (*setter)(sensor_t *, int));
     void setLevel(uint8_t level);
+    framesize_t selectableMax() const;
 
     framesize_t frameSize_ = FRAMESIZE_VGA;
     framesize_t maxFrameSize_ = FRAMESIZE_VGA;
+    bool weakLink_ = false;
     // An H.264 session runs at the one resolution the encoder was created for, so the resolution
     // control is reported as a single choice and changes are rejected.
     bool h264Active_ = false;
