@@ -265,6 +265,8 @@ LAN, streaming QVGA and then switching to VGA, judged with `hw_test.py --log`.
 | AI-Thinker ESP32-CAM | 0.4.0, −77 dBm, reduced start, QVGA then VGA | FAIL | 83 frames, none dropped, but 2 transient WANT_WRITE; below the −75 dBm requirement, and the stream never stopped |
 | AI-Thinker ESP32-CAM | 0.4.0, −77 dBm, VGA then SVGA | FAIL | SVGA frames (15 kB at the strongest compression) wedged the TX buffers; the Wi-Fi reconnect recovered both wedges without a restart. 0.4.0 therefore hides SVGA and larger below −75 dBm, which is not yet measured on hardware |
 | AI-Thinker ESP32-CAM | 0.4.0, iPhone hotspot (carrier NAT) | **PASS** | 37 frames, none dropped |
+| AI-Thinker ESP32-CAM | 0.4.1, −72 dBm, viewer forced to relay-only on a carrier-NAT hotspot, coturn 4.18 | FAIL | 146 frames over 206 s, 1 dropped, all through the TURN relay (coturn processed about 12 packets/s). Answer in 1080 ms with a relay candidate. The tool counts 65 deferred sends, but that figure is the firmware's running total since boot; this capture added one |
+| AI-Thinker ESP32-CAM | 0.4.1, −70 to −74 dBm; direct, viewer network cut mid-stream, then viewer on Cloudflare WARP | FAIL | 187 frames over 745 s, 9 dropped, 7 of them after the deliberate cut. The dead session closed as "viewer stopped responding" with no Wi-Fi reconnect, and SinricPro stayed connected. Answers in 1099-1264 ms, except one at 3620 ms when the TURN allocation was slow. 1 transient WANT_WRITE |
 
 To add a row, build with `-DSINRICPRO_WEBRTC_DIAG` and run the tool against the board:
 
