@@ -39,6 +39,18 @@ bool offerWantsH264(const char *offer) {
     return strstr(offer, "m=video") != nullptr && strstr(offer, "H264") != nullptr;
 }
 
+#if CONFIG_IDF_TARGET_ESP32P4
+// The P4 encodes in hardware at the OV5647's native modes: the camera layer delivers 800x640 or
+// 1280x960, never a scaled size. Measured on a rev v1.3 chip: 15 fps and about 11 fps, limited by
+// PSRAM bandwidth for the colour conversion and encoder. "VGA" keeps its name so existing viewers
+// still find it.
+const WebRTCH264Mode kH264Modes[] = {
+    {"VGA", 800, 640, FRAMESIZE_SVGA, 1200000, 15},
+    {"HD", 1280, 960, FRAMESIZE_SXGA, 2000000, 15},
+};
+// Smart displays get the full field of view: the 800x640 mode is a centre crop.
+constexpr const char *kSmartDisplayMode = "HD";
+#else
 // Each size carries the rate the ESP32-S3 software encoder actually sustains at it. QVGA measured
 // 204 frames in 73 s on a XIAO ESP32S3 Sense, about 2.8 fps with no frame dropped; encoding itself
 // takes around 100 ms, so the ceiling is how fast the session loop drains encoded frames, not the
@@ -49,6 +61,10 @@ const WebRTCH264Mode kH264Modes[] = {
     {"QVGA", 320, 240, FRAMESIZE_QVGA, 400000, 3},
     {"VGA", 640, 480, FRAMESIZE_VGA, 800000, 2},
 };
+constexpr const char *kSmartDisplayMode = "VGA";
+#endif
+// Callbacks from one esp_peer_main_loop() call: candidates, state changes and control messages.
+constexpr size_t kEventQueueLength = 32;
 
 const WebRTCH264Mode *h264ModeForWidth(uint16_t width) {
     for (const WebRTCH264Mode &mode : kH264Modes)
@@ -74,10 +90,12 @@ bool SinricProWebRTCSession::begin(const Config &config) {
     controls_.begin(config_.maxFrameSize, config_.flashPin, config_.frameIntervalMs, config_.autoQuality);
 
     commands_ = xQueueCreate(4, sizeof(Command));
+    events_ = xQueueCreate(kEventQueueLength, sizeof(PeerEvent));
+    loopStopped_ = xSemaphoreCreateBinary();
     answerReady_ = xSemaphoreCreateBinary();
     answerLock_ = xSemaphoreCreateMutex();
     offerLock_ = xSemaphoreCreateMutex();
-    if (!commands_ || !answerReady_ || !answerLock_ || !offerLock_)
+    if (!commands_ || !events_ || !loopStopped_ || !answerReady_ || !answerLock_ || !offerLock_)
         return false;
 
     // Pinned to core 0, beside WiFi and TLS, so core 1 belongs to the H.264 encoder alone. Left
@@ -240,6 +258,7 @@ void SinricProWebRTCSession::run() {
         }
 
         if (rtc_.handle()) {
+#if !SINRICPRO_WEBRTC_PEER_LOOP_TASK
 #ifdef SINRICPRO_WEBRTC_DIAG
             const uint32_t loopStart = micros();
 #endif
@@ -251,10 +270,14 @@ void SinricProWebRTCSession::run() {
             const uint32_t loopUs = micros() - loopStart;
             diag_.loopUs += loopUs;
             diag_.loopMaxUs = std::max(diag_.loopMaxUs, loopUs);
+#endif
+#endif
+#ifdef SINRICPRO_WEBRTC_DIAG
             ++diag_.iterations;
             if (channelOpen_ || h264_.running())
                 reportDiag();
 #endif
+            drainEvents(true);
 
             // Independent of the DataChannel: video flows as soon as the peer is connected.
             if (h264_.running())
@@ -436,8 +459,8 @@ bool SinricProWebRTCSession::hasRelayCandidate() const {
     return false;
 }
 
-// The encoder reads YUV422 and the JPEG path needs JPEG, so the camera is re-initialised for the
-// session and restored afterwards. Re-initialising resets the sensor, hence the reapply.
+// The encoder reads raw frames and the JPEG path needs JPEG, so the camera is re-initialised for
+// the session and restored afterwards. Re-initialising resets the sensor, hence the reapply.
 bool SinricProWebRTCSession::selectCameraFormat(bool yuv) {
     camera_config_t cfg = config_.cameraConfig;
     if (!cfg.xclk_freq_hz) {
@@ -446,7 +469,13 @@ bool SinricProWebRTCSession::selectCameraFormat(bool yuv) {
     }
 
     if (yuv) {
+#if CONFIG_IDF_TARGET_ESP32P4
+        // The ISP's own YUV420 decodes green and colourless on chips below v3.0, so the encoder
+        // gets BGR888 and converts it on the PPA.
+        cfg.pixel_format = PIXFORMAT_RGB888;
+#else
         cfg.pixel_format = PIXFORMAT_YUV422;
+#endif
         cfg.frame_size = h264Mode_->frameSize;
         cfg.fb_count = 2;
         cfg.grab_mode = CAMERA_GRAB_LATEST;
@@ -534,7 +563,7 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     // Alexa and Google Home accept nothing below 480p, and have no DataChannel to ask for a
     // different size with, so the larger mode is chosen for them up front.
     if (!dataChannelOffered_) {
-        const WebRTCH264Mode *mode = h264ModeByName("VGA");
+        const WebRTCH264Mode *mode = h264ModeByName(kSmartDisplayMode);
         if (mode != nullptr)
             h264Mode_ = mode;
     }
@@ -572,12 +601,15 @@ void SinricProWebRTCSession::startPeer(Command &cmd) {
     cfg.extra_cfg = &peerDefaults_;
     cfg.extra_size = sizeof(peerDefaults_);
 
-    // Callbacks fire only inside loop(), so the first SDP reported after signal() is our answer.
+    // Callbacks fire only inside loop(), which starts after signal(), so the first SDP reported is
+    // our answer.
     int ret = rtc_.begin(cfg);
     if (!ret)
         ret = rtc_.startConnection();
     if (!ret)
         ret = rtc_.signal(ESP_PEER_MSG_TYPE_SDP, reinterpret_cast<const uint8_t *>(cmd.offer), strlen(cmd.offer));
+    if (!ret && !startPeerLoop())
+        ret = ESP_PEER_ERR_NO_MEM;
 
     if (ret) {
         log_e("Peer start failed: %d", ret);
@@ -595,6 +627,8 @@ void SinricProWebRTCSession::closePeer() {
     closeRequested_ = false;
     audioActive_ = false;
     capabilitiesPending_ = statePending_ = false;
+    stopPeerLoop();
+    drainEvents(false);
     rtc_.end();
     if (!answerPublished_)
         publishAnswer(false, "Camera closed the WebRTC session before answering");
@@ -641,72 +675,166 @@ String SinricProWebRTCSession::buildAnswer() const {
     return sdp.substring(0, split) + extra + sdp.substring(split);
 }
 
-int SinricProWebRTCSession::onMessage(esp_peer_msg_t *msg, void *ctx) {
-    auto *self = static_cast<SinricProWebRTCSession *>(ctx);
-    if (!msg || msg->size <= 0 || static_cast<size_t>(msg->size) > kMaxSignalBytes)
-        return -1;
-
+void SinricProWebRTCSession::handleMessage(int type, const char *data, int size) {
     String text;
-    text.concat(reinterpret_cast<const char *>(msg->data), msg->size);
+    text.concat(data, size);
 
-    if (msg->type == ESP_PEER_MSG_TYPE_SDP) {
-        self->localSdp_ = text;
-    } else if (msg->type == ESP_PEER_MSG_TYPE_CANDIDATE) {
+    if (type == ESP_PEER_MSG_TYPE_SDP) {
+        localSdp_ = text;
+    } else if (type == ESP_PEER_MSG_TYPE_CANDIDATE) {
         text.trim();
         if (text.startsWith("a="))
             text.remove(0, 2);
         if (text.startsWith("candidate:"))
-            self->localCandidates_.push_back(text);
+            localCandidates_.push_back(text);
     }
 
-    self->lastSignal_ = millis();
+    lastSignal_ = millis();
+}
+
+void SinricProWebRTCSession::handleState(esp_peer_state_t state) {
+    log_d("Peer state: %d", state);
+    if (state == ESP_PEER_STATE_DISCONNECTED || state == ESP_PEER_STATE_CONNECT_FAILED)
+        closeRequested_ = true;
+    // Encoding starts only once there is somewhere to send frames.
+    else if (state == ESP_PEER_STATE_CONNECTED && videoActive_ && !h264_.running())
+        startH264();
+    else if (state == ESP_PEER_STATE_VIDEO_PLI_RECEIVED)
+        h264_.requestKeyframe();
+}
+
+void SinricProWebRTCSession::handleChannelOpen(uint16_t streamId) {
+    channelId_ = streamId;
+    channelOpen_ = true;
+    lastFrameDeliveredMs_ = millis();
+    // Full-quality frames on a weak link overflow the Wi-Fi TX buffers before automatic quality
+    // sees a single dropped frame, and that overflow does not clear. Start low and let it climb.
+    if (!videoActive_)
+        controls_.startSession(WiFi.RSSI() < kWeakSignalDbm);
+    capabilitiesPending_ = statePending_ = true;
+}
+
+// A closing session passes dispatch = false to discard what the old peer left queued.
+void SinricProWebRTCSession::drainEvents(bool dispatch) {
+    PeerEvent event;
+    while (xQueueReceive(events_, &event, 0) == pdTRUE) {
+        if (dispatch) {
+            switch (event.type) {
+            case PeerEvent::Type::Message:
+                handleMessage(event.value, event.data, event.size);
+                break;
+            case PeerEvent::Type::State:
+                handleState(static_cast<esp_peer_state_t>(event.value));
+                break;
+            case PeerEvent::Type::ChannelOpen:
+                handleChannelOpen(static_cast<uint16_t>(event.value));
+                break;
+            case PeerEvent::Type::ChannelClose:
+                channelOpen_ = false;
+                closeRequested_ = true;
+                break;
+            case PeerEvent::Type::Data: {
+                String message;
+                message.concat(event.data, event.size);
+                controls_.apply(message);
+                statePending_ = true;
+                break;
+            }
+            }
+        }
+        free(event.data);
+    }
+}
+
+void SinricProWebRTCSession::postEvent(PeerEvent::Type type, int value, const void *data, int size) {
+    PeerEvent event = {type, value, nullptr, 0};
+    if (data && size > 0) {
+        event.data = static_cast<char *>(malloc(static_cast<size_t>(size) + 1));
+        if (!event.data) {
+            log_w("Out of memory for a peer event");
+            return;
+        }
+        memcpy(event.data, data, size);
+        event.data[size] = '\0';
+        event.size = size;
+    }
+    // Without a loop task the queue is drained by this same task, so waiting cannot help.
+    const TickType_t wait = SINRICPRO_WEBRTC_PEER_LOOP_TASK ? pdMS_TO_TICKS(100) : 0;
+    if (xQueueSend(events_, &event, wait) != pdTRUE) {
+        log_w("Peer event %d dropped", static_cast<int>(type));
+        free(event.data);
+    }
+}
+
+int SinricProWebRTCSession::onMessage(esp_peer_msg_t *msg, void *ctx) {
+    if (!msg || msg->size <= 0 || static_cast<size_t>(msg->size) > kMaxSignalBytes)
+        return -1;
+    static_cast<SinricProWebRTCSession *>(ctx)->postEvent(PeerEvent::Type::Message, msg->type, msg->data, msg->size);
     return 0;
 }
 
 int SinricProWebRTCSession::onState(esp_peer_state_t state, void *ctx) {
-    auto *self = static_cast<SinricProWebRTCSession *>(ctx);
-    log_d("Peer state: %d", state);
-    if (state == ESP_PEER_STATE_DISCONNECTED || state == ESP_PEER_STATE_CONNECT_FAILED)
-        self->closeRequested_ = true;
-    // Encoding starts only once there is somewhere to send frames.
-    else if (state == ESP_PEER_STATE_CONNECTED && self->videoActive_ && !self->h264_.running())
-        self->startH264();
-    else if (state == ESP_PEER_STATE_VIDEO_PLI_RECEIVED)
-        self->h264_.requestKeyframe();
+    static_cast<SinricProWebRTCSession *>(ctx)->postEvent(PeerEvent::Type::State, state);
     return 0;
 }
 
 int SinricProWebRTCSession::onChannelOpen(esp_peer_data_channel_info_t *ch, void *ctx) {
-    auto *self = static_cast<SinricProWebRTCSession *>(ctx);
-    self->channelId_ = ch->stream_id;
-    self->channelOpen_ = true;
-    self->lastFrameDeliveredMs_ = millis();
-    // Full-quality frames on a weak link overflow the Wi-Fi TX buffers before automatic quality
-    // sees a single dropped frame, and that overflow does not clear. Start low and let it climb.
-    if (!self->videoActive_)
-        self->controls_.startSession(WiFi.RSSI() < kWeakSignalDbm);
-    self->capabilitiesPending_ = self->statePending_ = true;
+    static_cast<SinricProWebRTCSession *>(ctx)->postEvent(PeerEvent::Type::ChannelOpen, ch->stream_id);
     return 0;
 }
 
 int SinricProWebRTCSession::onChannelClose(esp_peer_data_channel_info_t *, void *ctx) {
-    auto *self = static_cast<SinricProWebRTCSession *>(ctx);
-    self->channelOpen_ = false;
-    self->closeRequested_ = true;
+    static_cast<SinricProWebRTCSession *>(ctx)->postEvent(PeerEvent::Type::ChannelClose, 0);
     return 0;
 }
 
 int SinricProWebRTCSession::onData(esp_peer_data_frame_t *frame, void *ctx) {
-    auto *self = static_cast<SinricProWebRTCSession *>(ctx);
     if (!frame || frame->type != ESP_PEER_DATA_CHANNEL_STRING || frame->size <= 0 ||
         static_cast<size_t>(frame->size) > kMaxControlBytes)
         return 0;
-
-    String message;
-    message.concat(reinterpret_cast<const char *>(frame->data), frame->size);
-    self->controls_.apply(message);
-    self->statePending_ = true;
+    static_cast<SinricProWebRTCSession *>(ctx)->postEvent(PeerEvent::Type::Data, frame->type, frame->data, frame->size);
     return 0;
+}
+
+void SinricProWebRTCSession::loopTaskEntry(void *arg) {
+    static_cast<SinricProWebRTCSession *>(arg)->runPeerLoop();
+}
+
+void SinricProWebRTCSession::runPeerLoop() {
+    // esp_peer logs from this task too; see run() for why the stdout lock is taken up front.
+    fflush(stdout);
+    while (loopRunning_) {
+        peerLoopEnteredMs_ = millis();
+        inPeerLoop_ = true;
+        rtc_.loop();
+        inPeerLoop_ = false;
+        // loop() returns at once while packets keep arriving; the tick lets the idle task run.
+        vTaskDelay(1);
+    }
+    xSemaphoreGive(loopStopped_);
+    vTaskDelete(nullptr);
+}
+
+bool SinricProWebRTCSession::startPeerLoop() {
+    if (!SINRICPRO_WEBRTC_PEER_LOOP_TASK)
+        return true;
+    loopRunning_ = true;
+    if (xTaskCreatePinnedToCore(loopTaskEntry, "webrtc_peer", config_.taskStackSize, this, config_.taskPriority,
+                                &loopTask_, 0) != pdPASS) {
+        loopRunning_ = false;
+        loopTask_ = nullptr;
+        return false;
+    }
+    return true;
+}
+
+// Waits out one blocked loop() call, at most the ICE receive timeout.
+void SinricProWebRTCSession::stopPeerLoop() {
+    if (!loopTask_)
+        return;
+    loopRunning_ = false;
+    xSemaphoreTake(loopStopped_, portMAX_DELAY);
+    loopTask_ = nullptr;
 }
 
 void SinricProWebRTCSession::freeCommand(Command &cmd) {

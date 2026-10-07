@@ -1,6 +1,6 @@
 # WebRTC for Arduino ESP32
 
-WebRTC for Arduino ESP32 and ESP32-S3, powered by Espressif's `esp_peer` engine. Includes a camera doorbell example with a browser viewer, microphone streaming on XIAO ESP32S3 Sense, and ring/call controls. ESP32-S3 can also send H.264 on a native WebRTC video track.
+WebRTC for Arduino ESP32, ESP32-S3 and ESP32-P4, powered by Espressif's `esp_peer` engine. Includes a camera doorbell example with a browser viewer, microphone streaming on XIAO ESP32S3 Sense, and ring/call controls. ESP32-S3 and ESP32-P4 can also send H.264 on a native WebRTC video track, encoded in software on the S3 and in hardware on the P4.
 
 The IDF dependencies are bundled as precompiled static libraries (`.a`). No ESP-IDF or WSL setup is needed to use the library in Arduino IDE.
 
@@ -126,18 +126,33 @@ Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.
 
 **Video track (ESP32-S3).** Set `Config::h264 = true`, give `Config::cameraConfig` the same `camera_config_t` you passed to `WebRTCCamera::begin()`, and call `camera.enableWebRTCVideo()` so viewers offer a video track. The session then re-initialises the camera in YUV422, encodes with esp_h264 on its own task pinned to the second core, and sends H.264 over RTP while the DataChannel carries only the controls. `Config::h264Width` selects a mode: 320 x 240 at about 3 fps, or 640 x 480 at about 2 fps. A viewer with no DataChannel is a smart display and always gets 640 x 480, since Alexa and Google Home refuse anything below 480p. It restores JPEG mode when the viewer leaves. The encoder adds roughly 272 KB of flash and has no prebuilt library for classic ESP32, which keeps the DataChannel path.
 
+## ESP32-P4
+
+The **SinricProCameraP4** example streams an ESP32-P4's MIPI-CSI camera to the SinricPro portal and app, with H.264 encoded in hardware.
+
+**Board.** Use an ESP32-P4 board with on-board Wi-Fi: an ESP32-C6 wired to the P4 over SDIO and running ESP-Hosted, as on the Espressif ESP32-P4-Function-EV-Board and Waveshare's ESP32-P4 Wi-Fi boards. The Arduino core drives it through the normal `WiFi` API. A separate C6 board on jumper wires is not a good substitute: at the rate video needs, the link sees CRC errors and ESP-Hosted resets the P4 on each one.
+
+**Camera.** The supported sensor is the OV5647 (Raspberry Pi Camera Rev 1.3 and compatibles) on a camera ribbon cable; a Raspberry Pi display cable has a different pinout. The core ships no `esp32-camera` for the P4, so this library provides its `esp_camera.h` API there, built on Espressif's `esp_cam_sensor`, MIPI-CSI, ISP and JPEG drivers. Set the sensor's I2C pins in `Settings.h`; on other targets `esp_camera.h` and `img_converters.h` resolve to the core's own esp32-camera headers.
+
+**Tools menu.** Select **ESP32P4 Dev Module** (or your board), set **Chip Variant** to match the chip (the boot log prints its revision; "Before v3.00" covers v1.x), enable **PSRAM**, and choose **Huge APP**. One archive serves both chip variants: its code is compiled for the instruction set they share.
+
+**Video.** `Config::h264Width` selects 800 x 640 at 15 fps, a centre crop of the sensor, or 1280 x 960 at about 11 fps, the full field of view; smart displays get 1280 x 960. The camera delivers BGR888 and the Pixel Processing Accelerator converts each frame to the packed YUV420 the hardware encoder takes, because the ISP's own YUV420 decodes green and colourless on chips below v3.0. `esp_peer_main_loop()` runs on a task of its own on the P4: it waits up to 500 ms for an incoming packet, and sharing the session task held the encoder to about 3 fps. Its callbacks reach the session task as queued events on every target.
+
+These rates were measured with the ESP-IDF version of the same pipeline on an ESP32-P4 rev v1.3. The Arduino example compiles for both chip variants but has not yet run on hardware.
+
 ## Capabilities and limits
 
 | Feature | Included behavior |
 | --- | --- |
 | Camera | 640 x 480 JPEG images by default, up to 5 fps, over an encrypted WebRTC data channel |
 | Camera (ESP32-S3) | H.264 on a native video track, 320 x 240 at about 3 fps or 640 x 480 at about 2 fps, encoded in software by esp_h264 |
+| Camera (ESP32-P4) | H.264 on a native video track, 800 x 640 at 15 fps or 1280 x 960 at about 11 fps, encoded in hardware |
 | Browser viewer | Served directly by the board; reassembles and displays JPEG frames |
 | Microphone | XIAO Sense onboard PDM microphone, sent as an 8 kHz PCMU/G.711 audio track |
 | Controls | Ring, accept, end call, and an open-door command placeholder |
 | Signaling | Doorbell: local HTTP with a viewer token. SinricProCamera: SinricPro cloud, with STUN/TURN |
 
-JPEG camera streaming requires the included viewer; it is not a native WebRTC video track. H.264 encoding is available on ESP32-S3 only, where it is capped near 320 x 240 by the software encoder. Speaker playback, two-way audio, and acoustic echo cancellation are not included. Microphones on other board profiles are disabled by default.
+JPEG camera streaming requires the included viewer; it is not a native WebRTC video track. H.264 encoding is available on ESP32-S3, where it is capped near 320 x 240 by the software encoder, and on ESP32-P4, in hardware. Speaker playback, two-way audio, and acoustic echo cancellation are not included. Microphones on other board profiles are disabled by default.
 
 **An H.264 video track and an audio track do not run well together.** Measured on a XIAO ESP32S3 Sense: video alone delivers about 3 fps with no loss, but with a PCMU track negotiated the viewer loses roughly two thirds of the video packets and decodes nothing, while the audio itself arrives intact and the device reports every frame as sent. Enlarging `rtp_cfg.send_queue_num` to 128 and `send_pool_size` to 112 kB did not change it. The SinricPro portal and app therefore request audio only when the viewer turns it on. Offer both tracks only if you have verified the combination on your own board.
 

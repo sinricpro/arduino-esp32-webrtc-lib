@@ -8,13 +8,12 @@ import sys
 
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root / 'tools'))
-from build_config import add_core_argument, profile, data_dir, verify_archive
+from build_config import add_core_argument, binutil, verify_archive, TARGETS
 parser = argparse.ArgumentParser(description=__doc__)
 add_core_argument(parser)
 args = parser.parse_args()
-selected = profile(args.core_version)
-nm = data_dir() / f"packages/esp32/tools/esp-x32/{selected['toolchain']}/bin/xtensa-esp-elf-nm.exe"
-for target in ['esp32', 'esp32s3']:
+for target in TARGETS:
+    nm = binutil(args.core_version, target, 'nm')
     archive = verify_archive(args.core_version, target)
     data = archive.read_bytes()
     assert data[:8] == b'!<arch>\n'

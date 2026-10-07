@@ -4,8 +4,8 @@ from pathlib import Path
 Import("env", "pio_lib_builder")
 
 target = env.BoardConfig().get("build.mcu")
-if target not in ("esp32", "esp32s3"):
-    raise RuntimeError("SinricProWebRTC provides archives for ESP32 and ESP32-S3 only.")
+if target not in ("esp32", "esp32s3", "esp32p4"):
+    raise RuntimeError("SinricProWebRTC provides archives for ESP32, ESP32-S3 and ESP32-P4 only.")
 
 # Use the library builder's path: SCons changes cwd to this script's directory.
 archive_dir = Path(pio_lib_builder.path, "src", target).resolve()

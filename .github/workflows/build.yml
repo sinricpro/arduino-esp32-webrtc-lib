@@ -69,6 +69,8 @@ jobs:
         run: python tools/build_archives.py --target esp32 --core-version $env:CORE_VERSION
       - name: Build ESP32-S3 archive
         run: python tools/build_archives.py --target esp32s3 --core-version $env:CORE_VERSION
+      - name: Build ESP32-P4 archive
+        run: python tools/build_archives.py --target esp32p4 --core-version $env:CORE_VERSION
       - name: Check archive symbols and byte order
         run: python tests/archives.py --core-version $env:CORE_VERSION
       - name: Check the committed baseline archives against this build

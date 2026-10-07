@@ -5,11 +5,11 @@
 #include "esp_peer_default.h"
 
 #include "SinricProWebRTCVersion.h"
-#if !CONFIG_IDF_TARGET_ESP32 && !CONFIG_IDF_TARGET_ESP32S3
-#error "Precompiled WebRTC archives are available for ESP32 and ESP32-S3 only."
+#if !CONFIG_IDF_TARGET_ESP32 && !CONFIG_IDF_TARGET_ESP32S3 && !CONFIG_IDF_TARGET_ESP32P4
+#error "Precompiled WebRTC archives are available for ESP32, ESP32-S3 and ESP32-P4 only."
 #endif
 
-// All methods and callbacks run on the caller's task. Call loop() frequently.
+// Callbacks run inside loop(), on whichever task calls it. Call loop() frequently.
 // Do not call begin/end from a callback; defer lifecycle changes to your loop.
 class SinricProWebRTC {
 public:

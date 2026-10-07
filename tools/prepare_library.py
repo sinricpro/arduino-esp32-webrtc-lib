@@ -2,16 +2,16 @@
 import argparse
 import shutil
 from build_config import (ROOT, package_files, add_core_argument, library_dir,
-                          version_header, verify_archive)
+                          version_header, verify_archive, TARGETS)
 
 
 def prepare(core):
-    for target in ('esp32', 'esp32s3'):
+    for target in TARGETS:
         verify_archive(core, target)
     dest = library_dir(core)
     for f in package_files(ROOT):
         relative = f.relative_to(ROOT)
-        if relative.parts[:2] in [('src', 'esp32'), ('src', 'esp32s3')]:
+        if relative.parts[0] == 'src' and len(relative.parts) > 2 and relative.parts[1] in TARGETS:
             # Archives are untracked build output, so anything here is a local leftover that may
             # belong to a different core; only the ones just built for this one may be staged.
             continue
