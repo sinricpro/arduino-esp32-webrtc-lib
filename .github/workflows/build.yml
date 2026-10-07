@@ -82,7 +82,9 @@ jobs:
         run: python -m unittest discover -s tests -p "test_*.py"
       - name: Test browser viewer
         run: node tests/viewer.test.cjs
-      - name: Compile all Doorbell profiles and HardwareCheck
+      - name: Install the SinricPro library for SinricProCameraP4
+        run: arduino-cli lib install "SinricPro@5.1.0"
+      - name: Compile all Doorbell profiles, HardwareCheck and SinricProCameraP4
         run: python tools/compile_matrix.py --core-version $env:CORE_VERSION
       - name: Install PlatformIO
         if: matrix.core == '3.3.11'
