@@ -8,6 +8,12 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = json.loads((ROOT / 'tools/core_profiles.json').read_text())
 DEFAULT_CORE = '3.3.11'
+# Processors with a precompiled archive, by Arduino build.mcu. ESP32-P4 boards of every chip
+# revision share build.mcu=esp32p4, so one archive serves both.
+TARGETS = ('esp32', 'esp32s3', 'esp32p4')
+# The base RISC-V ISA both P4 SDK variants accept: v3.0+ chips add xesploop_xespv and earlier ones
+# xesppie, and the SDK flags name whichever the core was built for.
+P4_COMMON_MARCH = '-march=rv32imafc_zicsr_zifencei'
 PACKAGE_CONTENTS = ['library.properties', 'library.json', 'README.md', 'BUILDING.md', 'LICENSE',
                     'THIRD_PARTY.md', 'VALIDATION.md', 'src', 'examples',
                     'LICENSES', 'tools', 'tests']
@@ -52,6 +58,13 @@ def profile(core):
 def data_dir():
     return Path(os.environ.get('ARDUINO_DIRECTORIES_DATA') or
                 Path(os.environ['LOCALAPPDATA']) / 'Arduino15').resolve()
+
+
+def binutil(core, target, name):
+    """A binutils executable (ar, nm, objcopy) from the toolchain that builds `target`."""
+    if target == 'esp32p4':
+        return data_dir() / f"packages/esp32/tools/esp-rv32/{profile(core)['toolchain']}/bin/riscv32-esp-elf-{name}.exe"
+    return data_dir() / f"packages/esp32/tools/esp-x32/{profile(core)['toolchain']}/bin/xtensa-esp-elf-{name}.exe"
 
 
 def workspace(core):

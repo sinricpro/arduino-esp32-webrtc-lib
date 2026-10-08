@@ -44,6 +44,7 @@ Run commands individually and stop on errors. Confirm the selected core is insta
 python tools/fetch_sources.py --core-version $coreVersion
 python tools/build_archives.py --core-version $coreVersion --target esp32
 python tools/build_archives.py --core-version $coreVersion --target esp32s3
+python tools/build_archives.py --core-version $coreVersion --target esp32p4
 python tests/archives.py --core-version $coreVersion
 python tools/prepare_library.py --core-version $coreVersion
 python -m unittest discover -s tests -p "test_*.py"
@@ -54,7 +55,7 @@ python tools/package.py --core-version $coreVersion
 
 The source fetch verifies the pinned commits, including Mbed TLS. Each archive builder verifies the SDK IDF revision and source checkouts, and records its core, processor, dependency profile, source commits, and checksum in `build-info.json`. Staging and packaging reject mismatched profiles or modified archive bytes.
 
-The compile matrix builds all ten Doorbell profiles plus HardwareCheck. Board selection is written into isolated sketch copies so profiles sharing a core configuration can reuse Arduino's compilation cache. These builds never upload firmware.
+The compile matrix builds all ten Doorbell profiles, HardwareCheck, and, on core 3.3.11 and later, SinricProCameraP4 for both ESP32-P4 chip variants. SinricProCameraP4 needs the SinricPro library: `arduino-cli lib install "SinricPro@5.1.0"`. Board selection is written into isolated sketch copies so profiles sharing a core configuration can reuse Arduino's compilation cache. These builds never upload firmware.
 
 | Output | Location |
 | --- | --- |
@@ -64,11 +65,11 @@ The compile matrix builds all ten Doorbell profiles plus HardwareCheck. Board se
 | Compiler logs | `build/arduino-<core>/compile/*.log` |
 | Installable ZIP | `dist/SinricProWebRTC-<version>-arduino-<core>.zip` |
 
-The staged library contains both processor archives, an exact core guard in `SinricProWebRTCVersion.h`, matching Arduino metadata, and a README identifying the variant. The version comes from `library.properties`; a release build stops if it disagrees with the tag.
+The staged library contains the three processor archives, an exact core guard in `SinricProWebRTCVersion.h`, matching Arduino metadata, and a README identifying the variant. The version comes from `library.properties`; a release build stops if it disagrees with the tag.
 
 Keep Wi-Fi placeholders in the distributed example. Configure credentials only in your local sketch copy. For hardware validation, install the generated variant, upload HardwareCheck and Doorbell on the intended board, then test camera, audio where available, connection, disconnect/reconnect, and sustained streaming.
 
-The repository tracks only the 3.3.11 archives, under `src/esp32/` and `src/esp32s3/`, because Library Manager and the PlatformIO Registry install the tree as-is. Every tool that links or packages another core needs a staged build; `--core-version` selects which one.
+The repository tracks only the 3.3.11 archives, under `src/esp32/`, `src/esp32s3/` and `src/esp32p4/`, because Library Manager and the PlatformIO Registry install the tree as-is. Every tool that links or packages another core needs a staged build; `--core-version` selects which one.
 
 After a change that alters the built API, refresh the tracked pair from the 3.3.11 staged build and commit it:
 

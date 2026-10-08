@@ -31,8 +31,19 @@ struct WebRTCH264Mode {
 // Answers viewer offers that arrive over a cloud signaling channel (SinricPro getWebRTCAnswer)
 // and streams camera JPEG frames over the viewer's DataChannel, with viewer controls
 // (WebRTCCameraControls) and an optional PCMU microphone track.
-// One viewer at a time: a new offer replaces the current one. Every esp_peer call runs on the
-// session task; handleOffer() exchanges data with it only through a queue and semaphores.
+// One viewer at a time: a new offer replaces the current one. The session task owns all session
+// state; handleOffer() exchanges data with it only through a queue and semaphores, and esp_peer
+// callbacks reach it as queued events.
+//
+// esp_peer_main_loop() waits up to the ICE receive timeout (500 ms) for an incoming packet. On the
+// ESP32-P4 it runs on a task of its own, since sharing the session task held the hardware
+// encoder's 15 fps to about 3. The other targets keep it on the session task: a second task stack
+// costs internal RAM that classic ESP32 cannot spare once Wi-Fi and TLS are up.
+#if CONFIG_IDF_TARGET_ESP32P4
+#define SINRICPRO_WEBRTC_PEER_LOOP_TASK 1
+#else
+#define SINRICPRO_WEBRTC_PEER_LOOP_TASK 0
+#endif
 class SinricProWebRTCSession {
 public:
     struct Config {
@@ -58,17 +69,20 @@ public:
         // disables that too.
         uint32_t peerStallRestartMs = 20000;
 
-        // Send H.264 on a WebRTC video track when the viewer offers one (ESP32-S3 only, where
-        // esp_h264 encodes in software). A viewer that offers no video track still gets JPEG over
-        // the DataChannel, so older app and portal versions keep working.
+        // Send H.264 on a WebRTC video track when the viewer offers one: ESP32-S3, where esp_h264
+        // encodes in software, and ESP32-P4, where it encodes in hardware. A viewer that offers no
+        // video track still gets JPEG over the DataChannel, so older app and portal versions keep
+        // working.
         bool h264 = false;
         // Preferred H.264 size. It selects the smallest supported mode at least this wide, and that
         // mode supplies the frame rate and bitrate the encoder can hold at it, so neither is set
-        // here. A viewer with no DataChannel is a smart display and always gets 640x480.
+        // here. Modes: 320x240 and 640x480 on the S3, 800x640 and 1280x960 on the P4. A viewer
+        // with no DataChannel is a smart display and gets 640x480 on the S3, 1280x960 on the P4.
         uint16_t h264Width = 320;
         uint16_t h264Height = 240;
         // The board's camera wiring, as passed to esp_camera_init(). Required when h264 is set:
-        // the session re-initialises the camera in YUV422 for a video track and back to JPEG after.
+        // the session re-initialises the camera in the encoder's input format (YUV422 on the S3,
+        // BGR888 on the P4) for a video track and back to JPEG after.
         camera_config_t cameraConfig = {};
     };
 
@@ -111,7 +125,17 @@ private:
         std::vector<WebRTCIceServer> *iceServers;  // owned; freed by the session task
     };
 
+    // An esp_peer callback, copied so the session task can handle it after the callback returns.
+    struct PeerEvent {
+        enum class Type : uint8_t { Message, State, ChannelOpen, ChannelClose, Data };
+        Type type;
+        int value;   // message type, peer state or stream id
+        char *data;  // owned, NUL-terminated copy; freed by the session task
+        int size;
+    };
+
     static void taskEntry(void *arg);
+    static void loopTaskEntry(void *arg);
     static void watchdogEntry(void *arg);
     static int onMessage(esp_peer_msg_t *msg, void *ctx);
     static int onState(esp_peer_state_t state, void *ctx);
@@ -121,6 +145,14 @@ private:
     static void freeCommand(Command &cmd);
 
     void run();
+    void runPeerLoop();
+    void postEvent(PeerEvent::Type type, int value, const void *data = nullptr, int size = 0);
+    void drainEvents(bool dispatch);
+    void handleMessage(int type, const char *text, int size);
+    void handleState(esp_peer_state_t state);
+    void handleChannelOpen(uint16_t streamId);
+    bool startPeerLoop();
+    void stopPeerLoop();
     void startPeer(Command &cmd);
     void closePeer();
     void publishAnswer(bool ok, const String &error = String());
@@ -141,12 +173,17 @@ private:
     AudioSource audioSource_;
     esp_peer_default_cfg_t peerDefaults_ = {};
     QueueHandle_t commands_ = nullptr;
+    QueueHandle_t events_ = nullptr;
+    // The esp_peer_main_loop() task, when SINRICPRO_WEBRTC_PEER_LOOP_TASK is set.
+    TaskHandle_t loopTask_ = nullptr;
+    SemaphoreHandle_t loopStopped_ = nullptr;
+    std::atomic<bool> loopRunning_{false};
     SemaphoreHandle_t answerReady_ = nullptr;
     SemaphoreHandle_t answerLock_ = nullptr;
     SemaphoreHandle_t offerLock_ = nullptr;
     TaskHandle_t task_ = nullptr;
 
-    // Written by the session task around esp_peer_main_loop(), read by the watchdog timer.
+    // Written by whichever task runs esp_peer_main_loop(), around the call; read by the watchdog timer.
     volatile bool inPeerLoop_ = false;
     volatile uint32_t peerLoopEnteredMs_ = 0;
     volatile bool wifiRecoveryRequested_ = false;

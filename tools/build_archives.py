@@ -11,7 +11,7 @@ import argparse
 import hashlib
 import json
 from build_config import (add_core_argument, profile, data_dir, workspace, library_dir, sources_dir,
-                          source_patches, verify_sources)
+                          source_patches, verify_sources, binutil, TARGETS, P4_COMMON_MARCH)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,18 +20,18 @@ def run(args, **kwargs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--target', default='esp32s3', choices=['esp32s3', 'esp32'])
+    parser.add_argument('--target', default='esp32s3', choices=TARGETS)
     add_core_argument(parser)
     args = parser.parse_args()
     selected = profile(args.core_version)
     verify_sources(args.core_version)
     packages = data_dir() / 'packages/esp32'
     sdk = packages / f"tools/{args.target}-libs/{selected['sdk_version']}"
-    tool = packages / f"tools/esp-x32/{selected['toolchain']}/bin"
-    gcc = tool / f'xtensa-{args.target}-elf-gcc.exe'
-    ar = tool / 'xtensa-esp-elf-ar.exe'
-    nm = tool / 'xtensa-esp-elf-nm.exe'
-    objcopy = tool / 'xtensa-esp-elf-objcopy.exe'
+    if args.target == 'esp32p4':
+        gcc = packages / f"tools/esp-rv32/{selected['toolchain']}/bin/riscv32-esp-elf-gcc.exe"
+    else:
+        gcc = packages / f"tools/esp-x32/{selected['toolchain']}/bin/xtensa-{args.target}-elf-gcc.exe"
+    ar, nm, objcopy = (binutil(args.core_version, args.target, n) for n in ('ar', 'nm', 'objcopy'))
     out = workspace(args.core_version) / 'objects' / args.target
     out.mkdir(parents=True, exist_ok=True)
     mbed = sources_dir(args.core_version) / 'esp-idf/components/mbedtls/mbedtls'
@@ -100,6 +100,8 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
 }
 ''')
     flags = shlex.split((sdk / 'flags/c_flags').read_text())
+    if args.target == 'esp32p4':
+        flags = [P4_COMMON_MARCH if f.startswith('-march=') else f for f in flags]
     flags += ['-Os', '-DESP_PLATFORM', '-D_GNU_SOURCE', '-DHAVE_CONFIG_H',
               '-DMBEDTLS_CONFIG_FILE="webrtc_mbedtls_config.h"',
               '-I' + str(out), '-I' + str(mbed / 'include'), '-I' + str(mbed / 'library'),
@@ -107,7 +109,8 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
               '-I' + str(peer / 'include'), '-I' + str(peer / 'src'),
               '-I' + str(sdk / 'qio_qspi/include'),
               '-iprefix', str(sdk / 'include') + '/', '@' + str(sdk / 'flags/includes')]
-    # esp_h264 encodes H.264 in software, and only the S3 has a prebuilt library for it.
+    # esp_h264 encodes H.264 in software, and only the S3 has a prebuilt library for it. The P4's
+    # hardware encoder ships with the Arduino core's own esp_h264, so nothing is bundled for it.
     if args.target == 'esp32s3':
         flags += ['-DHAVE_ESP32S3',
                   '-I' + str(h264 / 'interface/include'), '-I' + str(h264 / 'sw/include'),

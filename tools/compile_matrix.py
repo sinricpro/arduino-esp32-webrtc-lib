@@ -1,11 +1,11 @@
-"""Compile the distributed Doorbell example for each board; never uploads."""
+"""Compile the distributed Doorbell example for each board, and the P4 example; never uploads."""
 from pathlib import Path
 import os
 import shutil
 import subprocess
 import argparse
 import re
-from build_config import add_core_argument, library_dir, workspace, verify_archive
+from build_config import add_core_argument, library_dir, workspace, verify_archive, TARGETS
 cli = os.environ.get('ARDUINO_CLI') or shutil.which('arduino-cli') or str(
     Path(os.environ['LOCALAPPDATA']) / 'Programs/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe')
 parser = argparse.ArgumentParser(description=__doc__)
@@ -14,7 +14,7 @@ options = parser.parse_args()
 # The checkout carries no archives to link against, so always compile the staged library.
 library = library_dir(options.core_version)
 build_root = workspace(options.core_version) / 'compile'
-for target in ('esp32', 'esp32s3'):
+for target in TARGETS:
     verify_archive(options.core_version, target)
 boards = [
     ('xiao', 2, 'XIAO_ESP32S3:PSRAM=opi'),
@@ -46,6 +46,23 @@ for name, profile, fqbn in boards:
     if result.returncode:
         print(log_path.read_text()); raise SystemExit(result.returncode)
     print(log_path.read_text(), flush=True)
+
+# The P4 example, once per chip variant: they share one archive but not the SDK it links against.
+# Cores before 3.3.11 ship neither esp_cam_sensor nor the hardware H.264 encoder for the P4.
+p4_variants = ('prev3', 'postv3') if tuple(map(int, options.core_version.split('.'))) >= (3, 3, 11) else ()
+for variant in p4_variants:
+    path = build_root / ('p4-' + variant)
+    path.mkdir(parents=True, exist_ok=True)
+    print('Compiling SinricProCameraP4', variant, flush=True)
+    log_path = build_root / ('p4-' + variant + '.log')
+    with log_path.open('w') as log:
+        result = subprocess.run([str(cli), 'compile', '--fqbn',
+            f'esp32:esp32:esp32p4:ChipVariant={variant},PSRAM=enabled,PartitionScheme=huge_app',
+            '--library', str(library), '--build-path', str(path),
+            str(library / 'examples/SinricProCameraP4')], stdout=log, stderr=subprocess.STDOUT)
+    print(log_path.read_text(), flush=True)
+    if result.returncode:
+        raise SystemExit(result.returncode)
 
 # The diagnostic sketch also uses the camera and public peer API.
 path = build_root / 'hardwarecheck'
