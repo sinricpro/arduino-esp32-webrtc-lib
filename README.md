@@ -128,7 +128,7 @@ Before connecting, viewers send `getCameraCapabilities`; the SinricPro SDK (5.1.
 
 ## ESP32-P4
 
-The **SinricProCameraP4** example streams an ESP32-P4's MIPI-CSI camera to the SinricPro portal and app, with H.264 encoded in hardware.
+The **SinricProCameraP4** example streams an ESP32-P4's MIPI-CSI camera to the SinricPro portal and app, with H.264 encoded in hardware. It needs Arduino ESP32 core **3.3.11**: earlier cores ship neither the camera sensor driver nor the hardware encoder for the P4.
 
 **Board.** Use an ESP32-P4 board with on-board Wi-Fi: an ESP32-C6 wired to the P4 over SDIO and running ESP-Hosted, as on the Espressif ESP32-P4-Function-EV-Board and Waveshare's ESP32-P4 Wi-Fi boards. The Arduino core drives it through the normal `WiFi` API. A separate C6 board on jumper wires is not a good substitute: at the rate video needs, the link sees CRC errors and ESP-Hosted resets the P4 on each one.
 

@@ -48,7 +48,9 @@ for name, profile, fqbn in boards:
     print(log_path.read_text(), flush=True)
 
 # The P4 example, once per chip variant: they share one archive but not the SDK it links against.
-for variant in ('prev3', 'postv3'):
+# Cores before 3.3.11 ship neither esp_cam_sensor nor the hardware H.264 encoder for the P4.
+p4_variants = ('prev3', 'postv3') if tuple(map(int, options.core_version.split('.'))) >= (3, 3, 11) else ()
+for variant in p4_variants:
     path = build_root / ('p4-' + variant)
     path.mkdir(parents=True, exist_ok=True)
     print('Compiling SinricProCameraP4', variant, flush=True)

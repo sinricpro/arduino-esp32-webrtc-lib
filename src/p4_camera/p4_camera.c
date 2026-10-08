@@ -1,6 +1,7 @@
-// Compiled on the ESP32-P4 only; other targets use the core's esp32-camera driver.
+// Compiled on the ESP32-P4 only; other targets use the core's esp32-camera driver. Cores without
+// esp_cam_sensor skip it, and src/esp_camera.h reports the core requirement instead.
 #include "sdkconfig.h"
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_IDF_TARGET_ESP32P4 && __has_include("esp_cam_sensor.h")
 /*
  * esp32-camera compatible API on the ESP32-P4: sensor RAW over MIPI-CSI -> ISP (denoise,
  * demosaic, colour matrix with white balance, sRGB gamma, sharpen) -> BGR888, which the hardware
