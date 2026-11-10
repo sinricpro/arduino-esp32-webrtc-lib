@@ -58,12 +58,17 @@
 #define CONTRAST_STEP           0.15f
 
 // Tuning for the OV5647, whose raw colour is muted
-// The ISP colour block only attenuates (0..1), so all saturation gain lives in the CCM
-#define CCM_SATURATION          1.70f
 #define BF_DENOISE_LEVEL        8
+// Sensor black level in the ISP's 8-bit domain (libcamera tuning: 16 of 1023), removed so the
+// white-balance gains and CCM act on signal only
+#define BLC_OFFSET              4
 // Damped so a continuous stream converges without visible flicker
 #define AWB_STRENGTH            0.3f
 #define AWB_EVERY_N_FRAMES      8
+// Largest linear max/min channel ratio that still counts as neutral, measured after the CCM
+#define AWB_NEUTRAL_RATIO       1.35f
+// Out of roughly 17k pixels sampled per 800x640 frame
+#define AWB_MIN_NEUTRAL_PIXELS  300
 #define DEFAULT_JPEG_QUALITY    12
 
 #define FRAME_BUFFERS           3
@@ -96,6 +101,7 @@ static jpeg_encoder_handle_t s_jpeg;
 static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_frame_done;
 static bool s_started;
+static color_raw_element_order_t s_bayer_order;  // order the current ISP processor was created with
 
 /*
  * Triple buffering. The CSI driver asks for the next frame's buffer at the same interrupt that
@@ -168,17 +174,32 @@ static bool raw_isp_color(esp_cam_sensor_output_format_t f, isp_color_t *isp_in)
     }
 }
 
+/*
+ * Bayer order the ISP must use for the sensor's current flip/mirror state. Flipping shifts the
+ * colour filter grid by one row, mirroring by one column. The OV5647 driver reports BGGR, true for
+ * its mode tables (mirror bit 0x3821[1] set), and does not update it when HMIRROR/VFLIP change;
+ * demosaicing with the wrong phase gives muted colour with green/magenta casts.
+ */
 static color_raw_element_order_t isp_bayer_order(const esp_cam_sensor_format_t *fmt)
 {
-    if (!fmt->isp_info) {
-        return COLOR_RAW_ELEMENT_ORDER_BGGR;
+    // Index bit 0 = one-column shift from BGGR, bit 1 = one-row shift
+    static const color_raw_element_order_t ORDERS[] = {
+        COLOR_RAW_ELEMENT_ORDER_BGGR, COLOR_RAW_ELEMENT_ORDER_GBRG,
+        COLOR_RAW_ELEMENT_ORDER_GRBG, COLOR_RAW_ELEMENT_ORDER_RGGB,
+    };
+    int idx = 0;
+    if (fmt->isp_info) {
+        switch (fmt->isp_info->isp_v1_info.bayer_type) {
+        case ESP_CAM_SENSOR_BAYER_GBRG: idx = 1; break;
+        case ESP_CAM_SENSOR_BAYER_GRBG: idx = 2; break;
+        case ESP_CAM_SENSOR_BAYER_RGGB: idx = 3; break;
+        default: break;
+        }
     }
-    switch (fmt->isp_info->isp_v1_info.bayer_type) {
-    case ESP_CAM_SENSOR_BAYER_RGGB: return COLOR_RAW_ELEMENT_ORDER_RGGB;
-    case ESP_CAM_SENSOR_BAYER_GRBG: return COLOR_RAW_ELEMENT_ORDER_GRBG;
-    case ESP_CAM_SENSOR_BAYER_GBRG: return COLOR_RAW_ELEMENT_ORDER_GBRG;
-    default:                        return COLOR_RAW_ELEMENT_ORDER_BGGR;
+    if (s_cam && strcmp(s_cam->name, "OV5647") == 0) {
+        idx ^= (s_sensor.status.hmirror ? 0 : 1) | (s_sensor.status.vflip ? 2 : 0);
     }
+    return ORDERS[idx];
 }
 
 static uint32_t srgb_gamma_curve(uint32_t x)
@@ -193,19 +214,26 @@ static uint32_t srgb_gamma_curve(uint32_t x)
 }
 
 /*
+ * OV5647 colour correction at 4700 K from Raspberry Pi's libcamera tuning (vc4/data/ov5647.json).
+ * Rows sum to 1, so white-balanced greys stay neutral.
+ */
+static const float OV5647_CCM[3][3] = {
+    {2.00971f, -0.51461f, -0.49511f},
+    {-0.52109f, 2.01003f, -0.48894f},
+    {-0.09527f, -0.67318f, 1.76845f},
+};
+
+/*
  * White balance has to live in the colour matrix: the dedicated WBG block needs chip rev >= 3.0.
- * Matrix = saturation(linear, Rec.709 luma) * diag(gain_r, 1, gain_b).
- * Saturation rows sum to 1, so neutral greys stay neutral.
+ * Matrix = CCM * diag(gain_r, 1, gain_b).
  */
 static void ccm_apply(void)
 {
-    static const float luma[3] = {0.2126f, 0.7152f, 0.0722f};
     const float wb[3] = {s_gain_r, 1.0f, s_gain_b};
     esp_isp_ccm_config_t cfg = {.saturation = true};
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
-            float s = (1.0f - CCM_SATURATION) * luma[j] + (i == j ? CCM_SATURATION : 0.0f);
-            cfg.matrix[i][j] = s * wb[j];
+            cfg.matrix[i][j] = OV5647_CCM[i][j] * wb[j];
         }
     }
     esp_isp_ccm_configure(s_isp, &cfg);
@@ -217,7 +245,11 @@ static void clamp_gains(void)
     s_gain_b = fminf(fmaxf(s_gain_b, 0.5f), 3.5f);
 }
 
-// Grey-world estimate on BGR888: undo the sRGB curve, average unclipped pixels, nudge R/B gains
+/*
+ * Grey-pixel white balance on BGR888: undo the sRGB curve and average only pixels already close
+ * to neutral. Plain grey-world turns scenes dominated by one colour (brown curtains) toward its
+ * complement; too few neutral pixels keeps the current gains.
+ */
 static void awb_update_bgr(const uint8_t *frame)
 {
     float sum_r = 0, sum_g = 0, sum_b = 0;
@@ -229,12 +261,16 @@ static void awb_update_bgr(const uint8_t *frame)
         if (mx >= 250 || mx < 12) {
             continue;
         }
-        sum_b += s_srgb_to_linear[p[0]];
-        sum_g += s_srgb_to_linear[p[1]];
-        sum_r += s_srgb_to_linear[p[2]];
+        float b = s_srgb_to_linear[p[0]], g = s_srgb_to_linear[p[1]], r = s_srgb_to_linear[p[2]];
+        if (fmaxf(r, fmaxf(g, b)) > AWB_NEUTRAL_RATIO * fminf(r, fminf(g, b))) {
+            continue;
+        }
+        sum_b += b;
+        sum_g += g;
+        sum_r += r;
         n++;
     }
-    if (n < 100 || sum_r <= 0 || sum_g <= 0 || sum_b <= 0) {
+    if (n < AWB_MIN_NEUTRAL_PIXELS || sum_r <= 0 || sum_g <= 0 || sum_b <= 0) {
         return;
     }
     s_gain_r *= powf(sum_g / sum_r, AWB_STRENGTH);
@@ -283,6 +319,17 @@ static void awb_update_yuv(const uint8_t *frame)
 // Enables the ISP stages; any stage the silicon rejects is skipped with a warning
 static void isp_tuning_init(void)
 {
+    // BLC needs chip rev >= 3.0; earlier chips run without it
+    esp_isp_blc_config_t blc = {
+        .window = {.btm_right = {.x = s_fmt->width, .y = s_fmt->height}},
+        .stretch = {true, true, true, true},
+    };
+    esp_isp_blc_offset_t blc_offset = {BLC_OFFSET, BLC_OFFSET, BLC_OFFSET, BLC_OFFSET};
+    if (esp_isp_blc_configure(s_isp, &blc) != ESP_OK || esp_isp_blc_enable(s_isp) != ESP_OK ||
+        esp_isp_blc_set_correction_offset(s_isp, &blc_offset) != ESP_OK) {
+        ESP_LOGW(TAG, "ISP black level correction unavailable");
+    }
+
     esp_isp_bf_config_t bf = {
         .denoising_level = BF_DENOISE_LEVEL,
         .padding_mode = ISP_BF_EDGE_PADDING_MODE_SRND_DATA,
@@ -431,6 +478,7 @@ static esp_err_t pipeline_open(const esp_cam_sensor_format_t *fmt, bool yuv)
     apply_flip_mirror();
     s_fmt = fmt;
     s_yuv = yuv;
+    s_bayer_order = isp_bayer_order(fmt);
     s_frame_len = (size_t)fmt->width * fmt->height * (yuv ? 3 : 6) / 2;
 
     // The ISP sits between the PHY and the CSI bridge, so the bridge already sees the ISP's
@@ -468,7 +516,7 @@ static esp_err_t pipeline_open(const esp_cam_sensor_format_t *fmt, bool yuv)
         .has_line_end_packet = fmt->mipi_info.line_sync_en,
         .h_res = fmt->width,
         .v_res = fmt->height,
-        .bayer_order = isp_bayer_order(fmt),
+        .bayer_order = s_bayer_order,
     };
     ESP_RETURN_ON_ERROR(esp_isp_new_processor(&isp_config, &s_isp), TAG, "ISP init failed");
     ESP_RETURN_ON_ERROR(esp_isp_enable(s_isp), TAG, "ISP enable");
@@ -558,11 +606,25 @@ static int sensor_set_quality(sensor_t *sensor, int quality)
     return 0;
 }
 
+// The ISP takes its Bayer order only at creation, so a change of order reopens the pipeline
+static esp_err_t set_flip_mirror(void)
+{
+    if (!s_csi) {
+        return apply_flip_mirror();
+    }
+    if (isp_bayer_order(s_fmt) == s_bayer_order) {
+        return apply_flip_mirror();
+    }
+    const esp_cam_sensor_format_t *fmt = s_fmt;
+    pipeline_close();
+    return pipeline_open(fmt, s_yuv);
+}
+
 static int sensor_set_vflip(sensor_t *sensor, int enable)
 {
     xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
     sensor->status.vflip = enable ? 1 : 0;
-    esp_err_t ret = apply_flip_mirror();
+    esp_err_t ret = set_flip_mirror();
     xSemaphoreGiveRecursive(s_lock);
     return ret == ESP_OK ? 0 : -1;
 }
@@ -571,7 +633,7 @@ static int sensor_set_hmirror(sensor_t *sensor, int enable)
 {
     xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
     sensor->status.hmirror = enable ? 1 : 0;
-    esp_err_t ret = apply_flip_mirror();
+    esp_err_t ret = set_flip_mirror();
     xSemaphoreGiveRecursive(s_lock);
     return ret == ESP_OK ? 0 : -1;
 }
