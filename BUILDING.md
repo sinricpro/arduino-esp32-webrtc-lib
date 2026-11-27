@@ -4,6 +4,7 @@ The build profiles in [tools/core_profiles.json](tools/core_profiles.json) selec
 
 | Arduino core | ESP-IDF | SDK package version | Xtensa toolchain |
 | --- | --- | --- | --- |
+| 4.0.0 | 6.1.1 | 4.0.0 | 2512 |
 | 3.3.11 | 5.5.5 | 3.3.11 | 2601 |
 | 3.3.10 | 5.5.4 | 3.3.10 | 2601 |
 
@@ -12,6 +13,8 @@ These are build configurations, not a claim that every board has been tested phy
 ## What is rebuilt
 
 The scripts compile available peer adapter and transport sources, libSRTP, and a private Mbed TLS configuration against the selected Arduino SDK. Private crypto symbols are renamed to avoid conflicts with Arduino's TLS libraries. Espressif's supplied `libpeer_default.a` is included as a binary, so this is not a complete source rebuild of every dependency. See [THIRD_PARTY.md](THIRD_PARTY.md) for sources and licenses.
+
+Core 4.0.0 is built on ESP-IDF 6, whose Mbed TLS 4 keeps all crypto in a separate TF-PSA-Crypto tree with its own configuration. The builder detects that layout, compiles both trees, feeds PSA from the hardware RNG, and uses esp_peer 1.5.8, the first release with IDF 6 DTLS support. Older cores keep their pinned esp_peer.
 
 Your sketch, camera configuration, and the Arduino wrapper compile normally. Changes to those files do not require rebuilding the archives.
 
@@ -28,7 +31,7 @@ $env:ARDUINO_CLI = "$env:LOCALAPPDATA\Programs\Arduino IDE\resources\app\lib\bac
 Choose the target core. For local multi-version builds, isolate Arduino packages to avoid replacing your IDE's installed core:
 
 ```powershell
-$coreVersion = '3.3.10' # Or '3.3.11'.
+$coreVersion = '3.3.10' # Or '3.3.11' or '4.0.0'.
 $env:ARDUINO_DIRECTORIES_DATA = Join-Path (Get-Location) "build-support/arduino-$coreVersion"
 $env:ARDUINO_DIRECTORIES_DOWNLOADS = Join-Path (Get-Location) 'build-support/arduino-downloads'
 & $env:ARDUINO_CLI core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
@@ -55,7 +58,7 @@ python tools/package.py --core-version $coreVersion
 
 The source fetch verifies the pinned commits, including Mbed TLS. Each archive builder verifies the SDK IDF revision and source checkouts, and records its core, processor, dependency profile, source commits, and checksum in `build-info.json`. Staging and packaging reject mismatched profiles or modified archive bytes.
 
-The compile matrix builds all ten Doorbell profiles, HardwareCheck, and, on core 3.3.11 and later, SinricProCameraP4 for both ESP32-P4 chip variants. SinricProCameraP4 needs the SinricPro library: `arduino-cli lib install "SinricPro@5.1.0"`. Board selection is written into isolated sketch copies so profiles sharing a core configuration can reuse Arduino's compilation cache. These builds never upload firmware.
+The compile matrix builds all ten Doorbell profiles, HardwareCheck, and, on core 3.3.11 and later, SinricProCameraP4 for both ESP32-P4 chip variants. On a core whose P4 SDK has the CSI/DW-GDMA allocation bug ([arduino-esp32#13140](https://github.com/espressif/arduino-esp32/issues/13140), core 4.0.0), the matrix instead requires that build to stop with the `esp_camera.h` guard. SinricProCameraP4 needs the SinricPro library: `arduino-cli lib install "SinricPro@5.1.0"`. Board selection is written into isolated sketch copies so profiles sharing a core configuration can reuse Arduino's compilation cache. These builds never upload firmware.
 
 | Output | Location |
 | --- | --- |

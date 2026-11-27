@@ -18,6 +18,47 @@ ROOT = Path(__file__).resolve().parents[1]
 def run(args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, **kwargs)
 
+
+def disable(config, names):
+    for name in names:
+        config = config.replace('#define ' + name + '\n', '//#define ' + name + '\n')
+    return config
+
+
+def mbed_configs(mbedtls4):
+    """(disabled, appended) option pairs for the TLS config and, on Mbed TLS 4, the crypto config.
+
+    Files, NV seeds and persistent keys have no backing store here; TLS 1.3 and tickets are unused
+    by DTLS-SRTP and only add size.
+    """
+    tls_off = ['MBEDTLS_NET_C', 'MBEDTLS_SSL_PROTO_TLS1_3', 'MBEDTLS_SSL_SESSION_TICKETS',
+               'MBEDTLS_SSL_TICKET_C']
+    storage_off = ['MBEDTLS_FS_IO', 'MBEDTLS_ENTROPY_NV_SEED', 'MBEDTLS_PSA_CRYPTO_STORAGE_C',
+                   'MBEDTLS_PSA_ITS_FILE_C']
+    if not mbedtls4:
+        return ((tls_off + storage_off,
+                 '\n#define MBEDTLS_SSL_DTLS_SRTP\n#define MBEDTLS_NO_PLATFORM_ENTROPY\n'
+                 '#define MBEDTLS_ENTROPY_HARDWARE_ALT\n#define MBEDTLS_PLATFORM_MS_TIME_ALT\n'),
+                ([], ''))
+    # The hardware RNG feeds PSA directly, matching ESP-IDF's own port; the builtin entropy source
+    # expects /dev/urandom or getrandom().
+    return ((tls_off, '\n#define MBEDTLS_SSL_DTLS_SRTP\n'),
+            (storage_off + ['MBEDTLS_PSA_BUILTIN_GET_ENTROPY'],
+             '\n#define MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG\n#define MBEDTLS_PLATFORM_MS_TIME_ALT\n'))
+
+
+PORT_V4 = '''#include <stddef.h>
+#include "esp_random.h"
+#include "esp_timer.h"
+#include "psa/crypto.h"
+#include "mbedtls/platform_time.h"
+mbedtls_ms_time_t mbedtls_ms_time(void) { return esp_timer_get_time() / 1000; }
+psa_status_t mbedtls_psa_external_get_random(mbedtls_psa_external_random_context_t *context,
+                                             uint8_t *output, size_t output_size, size_t *output_length) {
+    (void)context; esp_fill_random(output, output_size); *output_length = output_size; return PSA_SUCCESS;
+}
+'''
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--target', default='esp32s3', choices=TARGETS)
@@ -40,15 +81,16 @@ def main():
     h264 = sources_dir(args.core_version) / 'esp_h264'
     if f"esp-idf: v{selected['idf_version']} {selected['idf_commit'][:10]}" not in (sdk / 'versions.txt').read_text():
         raise SystemExit('Unexpected Arduino IDF SDK revision; refusing an ABI-mismatched build.')
-    config = (mbed / 'include/mbedtls/mbedtls_config.h').read_text()
-    disabled = ['MBEDTLS_NET_C', 'MBEDTLS_FS_IO', 'MBEDTLS_ENTROPY_NV_SEED',
-                'MBEDTLS_PSA_CRYPTO_STORAGE_C', 'MBEDTLS_PSA_ITS_FILE_C',
-                'MBEDTLS_SSL_PROTO_TLS1_3', 'MBEDTLS_SSL_SESSION_TICKETS',
-                'MBEDTLS_SSL_TICKET_C']
-    for name in disabled:
-        config = config.replace('#define ' + name + '\n', '//#define ' + name + '\n')
-    config += '\n#define MBEDTLS_SSL_DTLS_SRTP\n#define MBEDTLS_NO_PLATFORM_ENTROPY\n#define MBEDTLS_ENTROPY_HARDWARE_ALT\n#define MBEDTLS_PLATFORM_MS_TIME_ALT\n'
+    # Mbed TLS 4 (ESP-IDF 6) moves all crypto into a separate TF-PSA-Crypto tree with its own config.
+    psa = mbed / 'tf-psa-crypto'
+    mbedtls4 = psa.is_dir()
+    crypto_config = psa / 'include/psa/crypto_config.h'
+    mbed_defines, crypto_defines = mbed_configs(mbedtls4)
+    config = disable((mbed / 'include/mbedtls/mbedtls_config.h').read_text(), mbed_defines[0]) + mbed_defines[1]
     (out / 'webrtc_mbedtls_config.h').write_text(config)
+    if mbedtls4:
+        (out / 'webrtc_crypto_config.h').write_text(
+            disable(crypto_config.read_text(), crypto_defines[0]) + crypto_defines[1])
     (out / 'config.h').write_text('''#pragma once
 #define PACKAGE_VERSION "3.0.0-dev"
 #define PACKAGE_STRING "libsrtp 3.0.0-dev"
@@ -70,7 +112,7 @@ def main():
 #define SIZEOF_UNSIGNED_LONG 4
 #define SIZEOF_UNSIGNED_LONG_LONG 8
 ''')
-    (out / 'esp_port.c').write_text('''#include <stddef.h>
+    (out / 'esp_port.c').write_text(PORT_V4 if mbedtls4 else '''#include <stddef.h>
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "mbedtls/platform_time.h"
@@ -104,7 +146,20 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
         flags = [P4_COMMON_MARCH if f.startswith('-march=') else f for f in flags]
     flags += ['-Os', '-DESP_PLATFORM', '-D_GNU_SOURCE', '-DHAVE_CONFIG_H',
               '-DMBEDTLS_CONFIG_FILE="webrtc_mbedtls_config.h"',
-              '-I' + str(out), '-I' + str(mbed / 'include'), '-I' + str(mbed / 'library'),
+              '-I' + str(out), '-I' + str(mbed / 'include'), '-I' + str(mbed / 'library')]
+    if mbedtls4:
+        # The SDK's own Mbed TLS headers sit on the @includes path too; listing the pinned tree
+        # first keeps the private build from mixing the two. MBEDTLS_MAJOR_VERSION comes from the
+        # SDK's flags/defines, which is not used whole because it also injects IDF's crypto config.
+        flags += ['-DTF_PSA_CRYPTO_CONFIG_FILE="webrtc_crypto_config.h"',
+                  '-DMBEDTLS_MAJOR_VERSION=4'] + [
+                  '-I' + str(psa / d) for d in ('include', 'drivers/builtin/include', 'core',
+                                                 'dispatch', 'drivers/builtin/src', 'extras',
+                                                 'platform', 'utilities')]
+    # esp_peer's v6 DTLS code reads fields Mbed TLS 4 marks private; upstream sets this for the
+    # component only, and Mbed TLS's own sources define it themselves.
+    category_flags = {'peer': ['-DMBEDTLS_DECLARE_PRIVATE_IDENTIFIERS']} if mbedtls4 else {}
+    flags += [
               '-I' + str(srtp / 'include'), '-I' + str(srtp / 'crypto/include'),
               '-I' + str(peer / 'include'), '-I' + str(peer / 'src'),
               '-I' + str(sdk / 'qio_qspi/include'),
@@ -116,14 +171,20 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
                   '-I' + str(h264 / 'interface/include'), '-I' + str(h264 / 'sw/include'),
                   '-I' + str(h264 / 'port/include'), '-I' + str(h264 / 'port/inc'),
                   '-I' + str(h264 / 'sw/libs/openh264_inc'), '-I' + str(h264 / 'sw/src')]
-    crypto_sources = [p for p in (mbed / 'library').glob('*.c') if p.name != 'timing.c'] + [out / 'esp_port.c']
+    if mbedtls4:
+        crypto_sources = (list((mbed / 'library').glob('*.c')) +
+                          [p for d in ('core', 'drivers/builtin/src', 'extras', 'platform', 'utilities')
+                           for p in (psa / d).glob('*.c')] + [out / 'esp_port.c'])
+    else:
+        crypto_sources = [p for p in (mbed / 'library').glob('*.c') if p.name != 'timing.c'] + [out / 'esp_port.c']
     srtp_sources = ['srtp/srtp.c', 'crypto/cipher/cipher.c', 'crypto/cipher/cipher_test_cases.c',
                     'crypto/cipher/null_cipher.c', 'crypto/cipher/aes.c', 'crypto/cipher/aes_icm.c',
                     'crypto/hash/auth.c', 'crypto/hash/auth_test_cases.c', 'crypto/hash/null_auth.c',
                     'crypto/hash/hmac.c', 'crypto/hash/sha1.c', 'crypto/kernel/alloc.c',
                     'crypto/kernel/crypto_kernel.c', 'crypto/kernel/err.c', 'crypto/kernel/key.c',
                     'crypto/math/datatypes.c', 'crypto/replay/rdb.c', 'crypto/replay/rdbx.c']
-    peer_sources = [peer / 'src' / f for f in ['esp_peer.c', 'media_lib_weak.c', 'dtls_srtp.c', 'peer_utils.c',
+    dtls = 'dtls_srtp_v6.c' if mbedtls4 else 'dtls_srtp.c'
+    peer_sources = [peer / 'src' / f for f in ['esp_peer.c', 'media_lib_weak.c', dtls, 'peer_utils.c',
                     'transport/udp.c', 'transport/tcp.c', 'transport/tls.c', 'transport/peer_tls_esp.c']]
     # Encoder only: a camera never decodes, and the decoder is what would drag in libtinyh264.
     # esp_h264_alloc_less_than_5_3.c is for ESP-IDF below 5.3; the pinned SDK is newer.
@@ -139,7 +200,8 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
         # both a C file and an esp32s3 assembly version. With names built from the stem alone the
         # second overwrote the first, and the archive lost yuyv2iyuv_esp32s3.
         obj = out / (category + '_' + src.parent.name + '_' + src.stem + '.o')
-        result = subprocess.run([str(gcc), *flags, '-c', str(src), '-o', str(obj)], capture_output=True, text=True)
+        result = subprocess.run([str(gcc), *flags, *category_flags.get(category, []), '-c', str(src),
+                                 '-o', str(obj)], capture_output=True, text=True)
         if result.returncode:
             raise RuntimeError(str(src) + '\n' + result.stdout + result.stderr)
         if obj.read_bytes()[:6] != b'\x7fELF\x01\x01':
@@ -176,7 +238,7 @@ int mbedtls_hardware_poll(void *ctx, unsigned char *out, size_t len, size_t *ole
     script += 'SAVE\nEND\n'
     run([ar, '-M'], input=script, text=True)
     undefined = run([nm, '-u', archive], capture_output=True, text=True).stdout
-    leaked = [line for line in undefined.splitlines() if len(line.split()) == 2 and line.split()[-1].startswith(('mbedtls_', 'psa_', 'srtp_'))]
+    leaked = [line for line in undefined.splitlines() if len(line.split()) == 2 and line.split()[-1].startswith(('mbedtls_', 'psa_', 'srtp_', 'tf_psa_'))]
     if leaked:
         raise RuntimeError('Unnamespaced private crypto references: ' + '\n'.join(leaked))
     manifest = {

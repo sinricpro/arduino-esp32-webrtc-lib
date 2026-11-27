@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        core: ['3.3.11', '3.3.10']
+        core: ['4.0.0', '3.3.11', '3.3.10']
     runs-on: windows-2022
     env:
       CORE_VERSION: ${{ matrix.core }}

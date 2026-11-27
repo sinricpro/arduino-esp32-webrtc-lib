@@ -19,7 +19,10 @@ SOURCES = [
 ]
 
 def git(path, *args):
-    return subprocess.check_output(['git', '-C', str(path), *args], text=True).strip()
+    # Mbed TLS 4's tf-psa-crypto has paths past Windows' 260-character limit. Git forwards -c
+    # settings to the submodule clones it spawns, so this covers those too.
+    return subprocess.check_output(['git', '-c', 'core.longpaths=true', '-C', str(path), *args],
+                                   text=True).strip()
 
 # Repository root, not build-support/: .gitignore excludes that whole tree, so patches kept there
 # would never reach CI and it would silently build stock sources.
