@@ -58,7 +58,7 @@ python tools/package.py --core-version $coreVersion
 
 The source fetch verifies the pinned commits, including Mbed TLS. Each archive builder verifies the SDK IDF revision and source checkouts, and records its core, processor, dependency profile, source commits, and checksum in `build-info.json`. Staging and packaging reject mismatched profiles or modified archive bytes.
 
-The compile matrix builds all ten Doorbell profiles, HardwareCheck, and, on core 3.3.11 and later, SinricProCameraP4 for both ESP32-P4 chip variants. SinricProCameraP4 needs the SinricPro library: `arduino-cli lib install "SinricPro@5.1.0"`. Board selection is written into isolated sketch copies so profiles sharing a core configuration can reuse Arduino's compilation cache. These builds never upload firmware.
+The compile matrix builds all ten Doorbell profiles, HardwareCheck, and, on core 3.3.11 and later, SinricProCameraP4 for both ESP32-P4 chip variants. On a core whose P4 SDK has the CSI/DW-GDMA allocation bug ([arduino-esp32#13140](https://github.com/espressif/arduino-esp32/issues/13140), core 4.0.0), the matrix instead requires that build to stop with the `esp_camera.h` guard. SinricProCameraP4 needs the SinricPro library: `arduino-cli lib install "SinricPro@5.1.0"`. Board selection is written into isolated sketch copies so profiles sharing a core configuration can reuse Arduino's compilation cache. These builds never upload firmware.
 
 | Output | Location |
 | --- | --- |

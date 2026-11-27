@@ -5,7 +5,8 @@ import shutil
 import subprocess
 import argparse
 import re
-from build_config import add_core_argument, library_dir, workspace, verify_archive, TARGETS
+from build_config import (add_core_argument, library_dir, workspace, verify_archive, data_dir,
+                          profile, TARGETS)
 cli = os.environ.get('ARDUINO_CLI') or shutil.which('arduino-cli') or str(
     Path(os.environ['LOCALAPPDATA']) / 'Programs/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe')
 parser = argparse.ArgumentParser(description=__doc__)
@@ -50,6 +51,18 @@ for name, profile, fqbn in boards:
 # The P4 example, once per chip variant: they share one archive but not the SDK it links against.
 # Cores before 3.3.11 ship neither esp_cam_sensor nor the hardware H.264 encoder for the P4.
 p4_variants = ('prev3', 'postv3') if tuple(map(int, options.core_version.split('.'))) >= (3, 3, 11) else ()
+P4_SDKS = {'prev3': 'esp32p4_es-libs', 'postv3': 'esp32p4-libs'}
+CSI_GUARD = 'cannot open the ESP32-P4 camera'
+
+
+def csi_broken(variant):
+    """Mirror the esp_camera.h guard, so an affected core must fail with that error, not link."""
+    sdkconfig = (data_dir() / 'packages/esp32/tools' / P4_SDKS[variant] /
+                 profile(options.core_version)['sdk_version'] / 'qio_qspi/include/sdkconfig.h').read_text()
+    return ('#define CONFIG_DW_GDMA_ISR_IRAM_SAFE 1' in sdkconfig and
+            '#define CONFIG_CAM_CTLR_MIPI_CSI_ISR_CACHE_SAFE 1' not in sdkconfig)
+
+
 for variant in p4_variants:
     path = build_root / ('p4-' + variant)
     path.mkdir(parents=True, exist_ok=True)
@@ -60,8 +73,13 @@ for variant in p4_variants:
             f'esp32:esp32:esp32p4:ChipVariant={variant},PSRAM=enabled,PartitionScheme=huge_app',
             '--library', str(library), '--build-path', str(path),
             str(library / 'examples/SinricProCameraP4')], stdout=log, stderr=subprocess.STDOUT)
-    print(log_path.read_text(), flush=True)
-    if result.returncode:
+    output = log_path.read_text()
+    print(output, flush=True)
+    if csi_broken(variant):
+        if not result.returncode or CSI_GUARD not in output:
+            raise SystemExit(f'{variant}: expected the CSI guard to stop this core\'s build')
+        print(f'{variant}: stopped by the CSI guard, as expected', flush=True)
+    elif result.returncode:
         raise SystemExit(result.returncode)
 
 # The diagnostic sketch also uses the camera and public peer API.

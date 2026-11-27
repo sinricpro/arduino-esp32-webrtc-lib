@@ -7,6 +7,11 @@
 #if !__has_include("esp_cam_sensor.h") || !__has_include("esp_h264_enc_single_hw.h")
 #error "ESP32-P4 camera support needs Arduino ESP32 core 3.3.11 or later."
 #endif
+// Core 4.0.0's SDK makes DW-GDMA demand an internal-RAM callback context but lets the CSI driver
+// allocate it from PSRAM, so the camera fails to open at runtime (arduino-esp32#13140).
+#if CONFIG_DW_GDMA_ISR_IRAM_SAFE && !CONFIG_CAM_CTLR_MIPI_CSI_ISR_CACHE_SAFE
+#error "This Arduino ESP32 core cannot open the ESP32-P4 camera (arduino-esp32#13140). Use core 3.3.11 or a core with the fix."
+#endif
 #include "p4_camera/esp_camera_p4.h"
 #else
 #include_next <esp_camera.h>
