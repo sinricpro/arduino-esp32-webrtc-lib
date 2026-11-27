@@ -2,7 +2,12 @@
 #include <SinricProWebRTC.h>
 #include <WebRTCCamera.h>
 #include "CameraConfig.h"
+// Core 4 ships Mbed TLS 4, which removed the one-shot mbedtls_sha256() in favour of PSA.
+#if ESP_ARDUINO_VERSION_MAJOR >= 4
+#include <psa/crypto.h>
+#else
 #include <mbedtls/sha256.h>
+#endif
 
 // Change for your board. No Wi-Fi credentials or Internet connection required.
 static constexpr auto BOARD = CameraSetup::Board::LilygoCamera;
@@ -41,7 +46,14 @@ void setup() {
                                 0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,
                                 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad};
     uint8_t digest[32];
+#if ESP_ARDUINO_VERSION_MAJOR >= 4
+    size_t digestLen = 0;
+    int coreRet = psa_crypto_init() ||
+                  psa_hash_compute(PSA_ALG_SHA_256, reinterpret_cast<const uint8_t *>("abc"), 3,
+                                   digest, sizeof(digest), &digestLen);
+#else
     int coreRet = mbedtls_sha256(reinterpret_cast<const uint8_t *>("abc"), 3, digest, 0);
+#endif
     Serial.printf("CHECK ARDUINO SHA256 %s\n",
                   !coreRet && !memcmp(digest, expected, 32) ? "PASS" : "FAIL");
     Serial.printf("CHECK SHA1 %d\n", sinric_private_mbedtls_sha1_self_test(0));

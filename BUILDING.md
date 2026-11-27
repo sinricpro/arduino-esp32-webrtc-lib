@@ -4,6 +4,7 @@ The build profiles in [tools/core_profiles.json](tools/core_profiles.json) selec
 
 | Arduino core | ESP-IDF | SDK package version | Xtensa toolchain |
 | --- | --- | --- | --- |
+| 4.0.0 | 6.1.1 | 4.0.0 | 2512 |
 | 3.3.11 | 5.5.5 | 3.3.11 | 2601 |
 | 3.3.10 | 5.5.4 | 3.3.10 | 2601 |
 
@@ -12,6 +13,8 @@ These are build configurations, not a claim that every board has been tested phy
 ## What is rebuilt
 
 The scripts compile available peer adapter and transport sources, libSRTP, and a private Mbed TLS configuration against the selected Arduino SDK. Private crypto symbols are renamed to avoid conflicts with Arduino's TLS libraries. Espressif's supplied `libpeer_default.a` is included as a binary, so this is not a complete source rebuild of every dependency. See [THIRD_PARTY.md](THIRD_PARTY.md) for sources and licenses.
+
+Core 4.0.0 is built on ESP-IDF 6, whose Mbed TLS 4 keeps all crypto in a separate TF-PSA-Crypto tree with its own configuration. The builder detects that layout, compiles both trees, feeds PSA from the hardware RNG, and uses esp_peer 1.5.8, the first release with IDF 6 DTLS support. Older cores keep their pinned esp_peer.
 
 Your sketch, camera configuration, and the Arduino wrapper compile normally. Changes to those files do not require rebuilding the archives.
 
@@ -28,7 +31,7 @@ $env:ARDUINO_CLI = "$env:LOCALAPPDATA\Programs\Arduino IDE\resources\app\lib\bac
 Choose the target core. For local multi-version builds, isolate Arduino packages to avoid replacing your IDE's installed core:
 
 ```powershell
-$coreVersion = '3.3.10' # Or '3.3.11'.
+$coreVersion = '3.3.10' # Or '3.3.11' or '4.0.0'.
 $env:ARDUINO_DIRECTORIES_DATA = Join-Path (Get-Location) "build-support/arduino-$coreVersion"
 $env:ARDUINO_DIRECTORIES_DOWNLOADS = Join-Path (Get-Location) 'build-support/arduino-downloads'
 & $env:ARDUINO_CLI core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json

@@ -1,4 +1,15 @@
 {
+  "4.0.0": {
+    "sdk_version": "4.0.0",
+    "toolchain": "2512",
+    "idf_version": "6.1.1",
+    "idf_commit": "051e4c4eb20346e043cdd47bc388fde75ff8af63",
+    "mbedtls_commit": "ce3f3485a121c100f58f36d700cb35b060f6e866",
+    "peer_commit": "dc3ab928137916d7b214a9a8ffe52e0e81794471",
+    "adf_commit": "da256e5f462a8e010667d35314a5ba5cdc4a8d9a",
+    "h264_version": "1.4.1",
+    "h264_sha256": "c42a736537eb67e465d996a6c8dc521ae2e93fdaa2f64b65a72efba305ad4e67"
+  },
   "3.3.11": {
     "sdk_version": "3.3.11",
     "toolchain": "2601",
